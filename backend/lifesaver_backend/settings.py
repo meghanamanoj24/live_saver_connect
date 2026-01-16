@@ -7,7 +7,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-secret-key")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
-AUTH_USER_MODEL = "core.DonorProfile"
+AUTH_USER_MODEL = "core.User"
 
 INSTALLED_APPS = [
 	"django.contrib.admin",
