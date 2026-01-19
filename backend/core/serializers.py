@@ -33,7 +33,6 @@ from .models import (
 	Invoice,
 )
 
-
 User = get_user_model()
 
 
@@ -69,13 +68,6 @@ class UserPublicSerializer(serializers.ModelSerializer):
 		fields = ["id", "first_name", "last_name", "email"]
 
 
-from rest_framework import serializers
-from .models import DonorProfile
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
-
-
 class DonorProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email", read_only=True)
     phone = serializers.CharField(source="user.phone", required=False)
@@ -89,15 +81,15 @@ class DonorProfileSerializer(serializers.ModelSerializer):
         fields = [
             "id",
 
-            # From USER model
+            # User fields
             "email",
             "phone",
             "gender",
             "blood_group",
             "role",
-			"name",
+            "name",
 
-            # From DonorProfile model
+            # DonorProfile fields
             "city",
             "zip_code",
             "is_platelet_donor",
@@ -109,6 +101,15 @@ class DonorProfileSerializer(serializers.ModelSerializer):
         first = obj.user.first_name or ""
         last = obj.user.last_name or ""
         return f"{first} {last}".strip()
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        user = instance.user
+        for attr, value in user_data.items():
+            setattr(user, attr, value)
+        user.save()
+        return super().update(instance, validated_data)
+
 
 class EmergencyNeedSerializer(serializers.ModelSerializer):
 	created_by = UserPublicSerializer(read_only=True)

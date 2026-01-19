@@ -319,6 +319,7 @@ class DonationRequest(TimeStampedModel):
 	]
 
 	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="donation_requests")
+	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="donor_requests", null=True, blank=True)
 	status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="PENDING")
 	message = models.TextField(blank=True)
 	scheduled_date = models.DateTimeField(null=True, blank=True)

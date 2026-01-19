@@ -158,7 +158,6 @@ class RegisterUserView(APIView):
                 if role == UserRoles.DONOR:
                     DonorProfile.objects.create(
                         user=user,
-                        phone=data["phone"]
                     )
 
                 elif role == UserRoles.HOSPITAL:

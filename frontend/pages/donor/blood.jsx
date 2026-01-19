@@ -57,7 +57,7 @@ export default function BloodDonation() {
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
 
-	
+
 	// Availability Schedule
 	const [showAvailabilityForm, setShowAvailabilityForm] = useState(false)
 	const [availabilitySchedule, setAvailabilitySchedule] = useState({
@@ -68,7 +68,7 @@ export default function BloodDonation() {
 		daysOfWeek: [],
 		notes: "",
 	})
-	
+
 	// Health Status
 	const [showHealthForm, setShowHealthForm] = useState(false)
 	const [healthStatus, setHealthStatus] = useState({
@@ -107,7 +107,7 @@ export default function BloodDonation() {
 		}
 	}, [])
 
-// Ensure we fetch the donor profile once on mount, so logged-in users see their details
+	// Ensure we fetch the donor profile once on mount, so logged-in users see their details
 	const loadDonorProfile = useCallback(async () => {
 		try {
 			const profile = await apiFetch("/donors/me/")
@@ -130,9 +130,9 @@ export default function BloodDonation() {
 		}
 	}, [])
 
-useEffect(() => {
-	loadDonorProfile()
-}, [loadDonorProfile])
+	useEffect(() => {
+		loadDonorProfile()
+	}, [loadDonorProfile])
 
 	const fetchDashboard = useCallback(
 		async (showLoader = true) => {
@@ -145,7 +145,7 @@ useEffect(() => {
 				if (data?.donor && typeof window !== "undefined") {
 					window.localStorage.setItem(DONOR_PROFILE_STORAGE_KEY, JSON.stringify(data.donor))
 				}
-				
+
 				// Also load hospital needs for matching blood group
 				if (data?.donor?.blood_group) {
 					try {
@@ -158,7 +158,7 @@ useEffect(() => {
 						console.error("Error loading hospital needs:", err)
 					}
 				}
-				
+
 				setErrorState(null)
 			} catch (err) {
 				if (err.status === 404) {
@@ -189,7 +189,7 @@ useEffect(() => {
 			setDonorProfile(localProfile)
 		}
 		console.log('RUNNING THIS');
-		
+
 		fetchDashboard()
 		loadDonationRequests()
 	}, [])
@@ -237,10 +237,10 @@ useEffect(() => {
 	const compatibility = dashboard?.compatibility ?? null
 	const recommendedNeeds = dashboard?.recommended_needs ?? []
 
-	
+
 	// Get upcoming events from API or use fallback
-	const upcomingEvents = dashboard?.upcoming_events?.length 
-		? dashboard.upcoming_events 
+	const upcomingEvents = dashboard?.upcoming_events?.length
+		? dashboard.upcoming_events
 		: UPCOMING_EVENTS_FALLBACK
 
 	// Blood compatibility mapping (frontend fallback if API doesn't provide)
@@ -276,7 +276,7 @@ useEffect(() => {
 		}
 		return null
 	}, [compatibility, donor?.blood_group, localProfile?.blood_group])
-	
+
 	// Check if user has any profile data (to determine if they should see registration prompt)
 	// Use donor from any source: API, dashboard, or localStorage
 	const hasProfile = !!(donor || localProfile)
@@ -288,12 +288,12 @@ useEffect(() => {
 		: "Switch availability back on to receive urgent notifications."
 	const lastDonationDisplay = displayDonor?.last_donated_on
 		? (() => {
-				const parsed = new Date(displayDonor.last_donated_on)
-				if (Number.isNaN(parsed.getTime())) {
-					return displayDonor.last_donated_on
-				}
-				return parsed.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
-		  })()
+			const parsed = new Date(displayDonor.last_donated_on)
+			if (Number.isNaN(parsed.getTime())) {
+				return displayDonor.last_donated_on
+			}
+			return parsed.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+		})()
 		: "Not recorded"
 
 	const totalBloodDonations = useMemo(
@@ -468,7 +468,7 @@ useEffect(() => {
 		}
 		const updatedHistory = [...healthHistory, historyEntry].slice(-30) // Keep last 30 entries
 		setHealthHistory(updatedHistory)
-		
+
 		// Save to localStorage
 		if (typeof window !== "undefined") {
 			localStorage.setItem("lifesaver:health_history", JSON.stringify(updatedHistory))
@@ -750,7 +750,7 @@ useEffect(() => {
 														{availabilityError && <p className="max-w-xs text-sm text-rose-300">{availabilityError}</p>}
 													</div>
 												</div>
-												
+
 												{/* Availability Schedule Form */}
 												{showAvailabilityForm && (
 													<div className="mt-4 rounded-lg border border-[#F6D6E3]/20 bg-[#131326] p-4 space-y-4">
@@ -808,11 +808,10 @@ useEffect(() => {
 																				setAvailabilitySchedule({ ...availabilitySchedule, daysOfWeek: [...days, day] })
 																			}
 																		}}
-																		className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-																			availabilitySchedule.daysOfWeek.includes(day)
-																				? "bg-[#E91E63] text-white"
-																				: "bg-[#1A1A2E] border border-[#F6D6E3]/30 text-pink-100/70 hover:border-[#E91E63]"
-																		}`}
+																		className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${availabilitySchedule.daysOfWeek.includes(day)
+																			? "bg-[#E91E63] text-white"
+																			: "bg-[#1A1A2E] border border-[#F6D6E3]/30 text-pink-100/70 hover:border-[#E91E63]"
+																			}`}
 																	>
 																		{day.slice(0, 3)}
 																	</button>
@@ -1001,11 +1000,10 @@ useEffect(() => {
 
 												{/* Health Assessment Results */}
 												{healthAssessment && (
-													<div className={`mt-4 rounded-lg border p-4 ${
-														healthAssessment.canDonate 
-															? "border-green-500/40 bg-green-500/10" 
-															: "border-yellow-500/40 bg-yellow-500/10"
-													}`}>
+													<div className={`mt-4 rounded-lg border p-4 ${healthAssessment.canDonate
+														? "border-green-500/40 bg-green-500/10"
+														: "border-yellow-500/40 bg-yellow-500/10"
+														}`}>
 														<div className="flex items-center gap-2 mb-3">
 															<svg className={`w-5 h-5 ${healthAssessment.canDonate ? "text-green-300" : "text-yellow-300"}`} fill="currentColor" viewBox="0 0 20 20">
 																<path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
@@ -1020,11 +1018,10 @@ useEffect(() => {
 														<div className="mb-3">
 															<p className="text-xs font-medium text-pink-100/80 mb-2">Health Score: {healthAssessment.healthScore}/100</p>
 															<div className="w-full bg-[#1A1A2E] rounded-full h-2">
-																<div 
-																	className={`h-2 rounded-full transition-all ${
-																		healthAssessment.healthScore >= 80 ? "bg-green-500" :
+																<div
+																	className={`h-2 rounded-full transition-all ${healthAssessment.healthScore >= 80 ? "bg-green-500" :
 																		healthAssessment.healthScore >= 60 ? "bg-yellow-500" : "bg-red-500"
-																	}`}
+																		}`}
 																	style={{ width: `${healthAssessment.healthScore}%` }}
 																/>
 															</div>
@@ -1076,10 +1073,9 @@ useEffect(() => {
 																<div key={index} className="flex-1 flex flex-col items-center">
 																	<div className="w-full flex flex-col items-center justify-end h-24">
 																		<div
-																			className={`w-full rounded-t transition-all ${
-																				entry.score >= 80 ? "bg-green-500" :
+																			className={`w-full rounded-t transition-all ${entry.score >= 80 ? "bg-green-500" :
 																				entry.score >= 60 ? "bg-yellow-500" : "bg-red-500"
-																			}`}
+																				}`}
 																			style={{ height: `${entry.score}%` }}
 																		/>
 																	</div>
@@ -1258,16 +1254,15 @@ useEffect(() => {
 												const isUrgent = need.status === "URGENT"
 												const neededByDate = need.needed_by ? new Date(need.needed_by) : null
 												const daysUntilNeeded = neededByDate ? Math.ceil((neededByDate - new Date()) / (1000 * 60 * 60 * 24)) : null
-												
+
 												return (
 													<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition">
 														<div className="flex items-start justify-between gap-3">
 															<div className="flex-1">
 																<div className="flex items-center gap-2 mb-2">
 																	<span className="font-medium text-white">{need.title || need.need_type || "Blood Need"}</span>
-																	<span className={`rounded px-2 py-1 text-xs font-semibold ${
-																		isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"
-																	}`}>
+																	<span className={`rounded px-2 py-1 text-xs font-semibold ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"
+																		}`}>
 																		{need.status || "NORMAL"}
 																	</span>
 																	<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
@@ -1294,10 +1289,9 @@ useEffect(() => {
 																	</p>
 																)}
 																{neededByDate && (
-																	<p className={`mt-1 text-sm font-medium ${
-																		daysUntilNeeded !== null && daysUntilNeeded <= 1 ? "text-red-300" :
+																	<p className={`mt-1 text-sm font-medium ${daysUntilNeeded !== null && daysUntilNeeded <= 1 ? "text-red-300" :
 																		daysUntilNeeded !== null && daysUntilNeeded <= 3 ? "text-yellow-300" : "text-pink-100/70"
-																	}`}>
+																		}`}>
 																		Needed by: {neededByDate.toLocaleDateString()} {neededByDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 																		{daysUntilNeeded !== null && daysUntilNeeded >= 0 && (
 																			<span className="ml-2">
@@ -1308,9 +1302,9 @@ useEffect(() => {
 																)}
 																{need.poster_image && (
 																	<div className="mt-3">
-																		<img 
-																			src={need.poster_image} 
-																			alt="Patient poster" 
+																		<img
+																			src={need.poster_image}
+																			alt="Patient poster"
 																			className="max-w-xs rounded-lg border border-[#F6D6E3]/20"
 																			onError={(e) => { e.target.style.display = 'none' }}
 																		/>
@@ -1385,20 +1379,191 @@ useEffect(() => {
 								<h2 className="text-lg font-semibold text-white">Helpful Resources</h2>
 								<div className="mt-4 grid gap-4 md:grid-cols-2">
 									<div className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4">
-										<h3 className="text-base font-medium text-white">Donation Preparation Checklist</h3>
+										<h3 className="text-base font-medium text-white">Donation Health Report</h3>
 										<p className="mt-2 text-sm text-pink-100/80">
-											Hydrate, eat iron-rich foods, and arrive with a government-issued ID.
+											Download your health assessment report to show at the donation center.
 										</p>
-										<Link href="#" legacyBehavior>
-											<a className="mt-3 inline-flex text-sm text-[#E91E63]">Download PDF</a>
-										</Link>
+										<button
+											onClick={async () => {
+												if (!healthAssessment) {
+													alert("Please complete the health assessment first.");
+													return;
+												}
+												try {
+													const { jsPDF } = await import("jspdf");
+													const doc = new jsPDF({
+														orientation: "portrait",
+														unit: "mm",
+														format: "a4"
+													});
+
+													const pageWidth = doc.internal.pageSize.getWidth();
+													const pageHeight = doc.internal.pageSize.getHeight();
+													const margin = 20;
+
+													// --- Background & Border ---
+													doc.setFillColor(255, 255, 255);
+													doc.rect(0, 0, pageWidth, pageHeight, "F");
+
+													doc.setDrawColor(26, 26, 46);
+													doc.setLineWidth(1);
+													doc.rect(margin, margin, pageWidth - (margin * 2), pageHeight - (margin * 2), "S");
+
+													// --- Header Section ---
+													doc.setFillColor(26, 26, 46); // Dark Blue Header
+													doc.rect(margin, margin, pageWidth - (margin * 2), 35, "F");
+
+													doc.setFontSize(24);
+													doc.setTextColor(233, 30, 99); // Pink Brand Color
+													doc.setFont("helvetica", "bold");
+													doc.text("LifeSaver Connect", margin + 10, margin + 18);
+
+													doc.setFontSize(10);
+													doc.setTextColor(255, 255, 255);
+													doc.setFont("helvetica", "normal");
+													doc.text("Official Donor Health Assessment", margin + 10, margin + 26);
+
+													doc.setFontSize(12);
+													doc.text("CONFIDENTIAL", pageWidth - margin - 10, margin + 18, { align: "right" });
+													doc.text(`Report ID: #${Math.floor(Math.random() * 100000)}`, pageWidth - margin - 10, margin + 26, { align: "right" });
+
+													// --- Donor Details Table ---
+													const startY = margin + 50;
+													doc.setTextColor(26, 26, 46);
+													doc.setFontSize(14);
+													doc.setFont("helvetica", "bold");
+													doc.text("Donor Profile Information", margin + 5, startY);
+
+													doc.setDrawColor(200, 200, 200);
+													doc.setLineWidth(0.5);
+													doc.line(margin + 5, startY + 3, pageWidth - margin - 5, startY + 3);
+
+													doc.setFontSize(11);
+													doc.setFont("helvetica", "normal");
+													doc.setTextColor(60, 60, 60);
+
+													const details = [
+														{ label: "Full Name", value: donor?.name || "Not Provided" },
+														{ label: "Blood Group", value: displayDonor?.blood_group || "N/A" },
+														{ label: "Contact", value: displayDonor?.phone || "Not Provided" },
+														{ label: "Email", value: displayDonor?.email || "Not Provided" },
+														{ label: "Assessment Date", value: new Date().toLocaleString() }
+													];
+
+													let currentY = startY + 15;
+													details.forEach(item => {
+														doc.setFont("helvetica", "bold");
+														doc.text(`${item.label}:`, margin + 10, currentY);
+														doc.setFont("helvetica", "normal");
+														doc.text(item.value, margin + 60, currentY);
+														currentY += 8;
+													});
+
+													// --- Health Score Section ---
+													const scoreY = currentY + 10;
+													doc.setFillColor(245, 245, 250);
+													doc.setDrawColor(230, 230, 230);
+													doc.roundedRect(margin + 5, scoreY, pageWidth - (margin * 2) - 10, 35, 3, 3, "FD");
+
+													doc.setFontSize(14);
+													doc.setTextColor(26, 26, 46);
+													doc.setFont("helvetica", "bold");
+													doc.text("Health Score", margin + 15, scoreY + 12);
+
+													// Color coded score
+													const scoreColor = healthAssessment.healthScore >= 80 ? [76, 175, 80] : healthAssessment.healthScore >= 60 ? [255, 193, 7] : [244, 67, 54];
+													doc.setTextColor(...scoreColor);
+													doc.setFontSize(28);
+													doc.text(`${healthAssessment.healthScore}/100`, margin + 15, scoreY + 26);
+
+													// Status Badge
+													const statusText = healthAssessment.canDonate ? "ELIGIBLE TO DONATE" : "NOT RECOMMENDED";
+													doc.setFillColor(...scoreColor);
+													doc.roundedRect(pageWidth - margin - 70, scoreY + 10, 55, 15, 2, 2, "F");
+													doc.setTextColor(255, 255, 255);
+													doc.setFontSize(10);
+													doc.setFont("helvetica", "bold");
+													doc.text(statusText, pageWidth - margin - 42.5, scoreY + 21, { align: "center" });
+
+													// --- Recommendations ---
+													const recY = scoreY + 45;
+													doc.setTextColor(26, 26, 46);
+													doc.setFontSize(14);
+													doc.setFont("helvetica", "bold");
+													doc.text("Medical Assessment & Recommendations", margin + 5, recY);
+													doc.setDrawColor(200, 200, 200);
+													doc.line(margin + 5, recY + 3, pageWidth - margin - 5, recY + 3);
+
+													doc.setFontSize(11);
+													doc.setTextColor(80, 80, 80);
+													doc.setFont("helvetica", "normal");
+
+													const messageLines = doc.splitTextToSize(healthAssessment.message, pageWidth - (margin * 2) - 20);
+													doc.text(messageLines, margin + 10, recY + 15);
+
+													if (healthAssessment.recommendation) {
+														const recHeaderY = recY + 15 + (messageLines.length * 5) + 5;
+														doc.setFont("helvetica", "bold");
+														doc.text("Steps Forward:", margin + 10, recHeaderY);
+
+														doc.setFont("helvetica", "normal");
+														const recLines = doc.splitTextToSize(healthAssessment.recommendation, pageWidth - (margin * 2) - 20);
+														doc.text(recLines, margin + 10, recHeaderY + 7);
+													}
+
+													// --- Official Seal ---
+													const sealY = pageHeight - margin - 50;
+													const sealX = pageWidth - margin - 40;
+
+													doc.setDrawColor(233, 30, 99); // Pink seal
+													doc.setLineWidth(1.5);
+													doc.circle(sealX, sealY, 20, "S");
+													doc.circle(sealX, sealY, 18, "S");
+
+													doc.setFontSize(8);
+													doc.setTextColor(233, 30, 99);
+													doc.setFont("helvetica", "bold");
+													doc.text("LIFESAVER", sealX, sealY - 10, { align: "center" });
+													doc.text("CONNECT", sealX, sealY + 12, { align: "center" });
+
+													doc.setFontSize(6);
+													doc.text("SYSTEM VERIFIED", sealX, sealY, { align: "center" });
+													// Rotate text for "APPROVED" is complex in pure jsPDF basic methods without plugins, 
+													// so we keep it simple but official looking.
+
+													// Use text for signature line since we don't have an image
+													doc.setDrawColor(0, 0, 0);
+													doc.setLineWidth(0.5);
+													doc.line(margin + 10, sealY + 10, margin + 70, sealY + 10);
+													doc.setFontSize(10);
+													doc.setTextColor(0, 0, 0);
+													doc.text("Authorized Signature", margin + 40, sealY + 16, { align: "center" });
+
+
+													// --- Footer ---
+													doc.setFontSize(8);
+													doc.setTextColor(150, 150, 150);
+													doc.text("This report is generated by LifeSaver Connect AI Health System.", margin, pageHeight - margin - 5);
+													doc.text("Not a replacement for professional medical diagnosis.", margin, pageHeight - margin);
+													doc.text(`Page 1 of 1`, pageWidth - margin, pageHeight - margin, { align: "right" });
+
+													doc.save(`LifeSaver_Report_${displayDonor?.name || "Donor"}.pdf`);
+												} catch (err) {
+													console.error(err);
+													alert("Error generating PDF. Please ensure you have an active health assessment.");
+												}
+											}}
+											className="mt-3 inline-flex text-sm text-[#E91E63] hover:underline"
+										>
+											Download PDF
+										</button>
 									</div>
 									<div className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4">
-										<h3 className="text-base font-medium text-white">Platelet Donation Guide</h3>
+										<h3 className="text-base font-medium text-white">How it Works</h3>
 										<p className="mt-2 text-sm text-pink-100/80">
-											Learn more about eligibility and the difference between whole blood and platelet donation.
+											Learn more about eligibility, finding hospitals, and the donation process.
 										</p>
-										<Link href="#" legacyBehavior>
+										<Link href="/guide/app-guide" legacyBehavior>
 											<a className="mt-3 inline-flex text-sm text-[#E91E63]">Read Article</a>
 										</Link>
 									</div>
