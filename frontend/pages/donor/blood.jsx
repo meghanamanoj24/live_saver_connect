@@ -31,12 +31,6 @@ const UPCOMING_EVENTS_FALLBACK = [
 	},
 ]
 
-function formatName(user) {
-	if (!user) return ""
-	const parts = [user.first_name, user.last_name].filter(Boolean)
-	if (parts.length) return parts.join(" ")
-	return user.username || ""
-}
 
 function calculateNextEligibleDate(lastDonationDate) {
 	if (!lastDonationDate) {
@@ -62,6 +56,7 @@ export default function BloodDonation() {
 	const [availabilitySaving, setAvailabilitySaving] = useState(false)
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
+
 	
 	// Availability Schedule
 	const [showAvailabilityForm, setShowAvailabilityForm] = useState(false)
@@ -150,6 +145,20 @@ useEffect(() => {
 				if (data?.donor && typeof window !== "undefined") {
 					window.localStorage.setItem(DONOR_PROFILE_STORAGE_KEY, JSON.stringify(data.donor))
 				}
+				
+				// Also load hospital needs for matching blood group
+				if (data?.donor?.blood_group) {
+					try {
+						const hospitalNeeds = await apiFetch(`/hospital-needs/?donor_blood_group=${data.donor.blood_group}&active_only=true&need_type=BLOOD`)
+						if (hospitalNeeds && hospitalNeeds.length > 0) {
+							// Merge hospital needs with emergency needs
+							data.recommended_needs = [...(data.recommended_needs || []), ...hospitalNeeds]
+						}
+					} catch (err) {
+						console.error("Error loading hospital needs:", err)
+					}
+				}
+				
 				setErrorState(null)
 			} catch (err) {
 				if (err.status === 404) {
@@ -222,11 +231,12 @@ useEffect(() => {
 	// Prioritize: API donor profile > Dashboard donor > LocalStorage profile
 	// This ensures we always show profile if it exists anywhere
 	const donor = donorProfile || dashboard?.donor || localProfile || null
+	console.log("donor profile----------------------", donor?.name)
 	// Also create a fallback donor object from localProfile if donor is null but localProfile exists
 	const displayDonor = donor || localProfile || null
 	const compatibility = dashboard?.compatibility ?? null
 	const recommendedNeeds = dashboard?.recommended_needs ?? []
-	const donorName = formatName(displayDonor?.user)
+
 	
 	// Get upcoming events from API or use fallback
 	const upcomingEvents = dashboard?.upcoming_events?.length 
@@ -623,7 +633,7 @@ useEffect(() => {
 											<div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Name</p>
-													<p className="mt-2 text-base font-medium text-white">{donorName || "Not provided"}</p>
+													<p className="mt-2 text-base font-medium text-white">{donor.name || "Not provided"}</p>
 												</div>
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Blood Group</p>
@@ -643,7 +653,7 @@ useEffect(() => {
 												</div>
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Email</p>
-													<p className="mt-2 text-base font-medium text-white">{displayDonor?.user?.email || "Not provided"}</p>
+													<p className="mt-2 text-base font-medium text-white">{displayDonor?.email || "Not provided"}</p>
 												</div>
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Platelet Donor</p>
@@ -1244,27 +1254,73 @@ useEffect(() => {
 									</div>
 									{recommendedNeeds.length ? (
 										<ul className="mt-4 space-y-3">
-											{recommendedNeeds.map((need) => (
-												<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4">
-													<div className="flex items-center justify-between text-sm text-pink-100/80">
-														<span className="font-medium text-white">{need.title}</span>
-														<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
-															{need.required_blood_group || "Any"}
-														</span>
-													</div>
-													<p className="mt-2 text-sm text-pink-100/70">
-														{need.city} {need.zip_code ? `• ${need.zip_code}` : ""}
-													</p>
-													{need.contact_phone && (
-														<p className="mt-1 text-sm text-pink-100/70">
-															Contact: <span className="font-medium text-white">{need.contact_phone}</span>
-														</p>
-													)}
-													{need.description && (
-														<p className="mt-2 line-clamp-3 text-sm text-pink-100/70">{need.description}</p>
-													)}
-												</li>
-											))}
+											{recommendedNeeds.map((need) => {
+												const isUrgent = need.status === "URGENT"
+												const neededByDate = need.needed_by ? new Date(need.needed_by) : null
+												const daysUntilNeeded = neededByDate ? Math.ceil((neededByDate - new Date()) / (1000 * 60 * 60 * 24)) : null
+												
+												return (
+													<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition">
+														<div className="flex items-start justify-between gap-3">
+															<div className="flex-1">
+																<div className="flex items-center gap-2 mb-2">
+																	<span className="font-medium text-white">{need.title || need.need_type || "Blood Need"}</span>
+																	<span className={`rounded px-2 py-1 text-xs font-semibold ${
+																		isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"
+																	}`}>
+																		{need.status || "NORMAL"}
+																	</span>
+																	<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
+																		{need.required_blood_group || "Any"}
+																	</span>
+																</div>
+																{need.patient_name && (
+																	<p className="text-sm text-pink-100/80 mb-1">
+																		Patient: <span className="font-medium text-white">{need.patient_name}</span>
+																	</p>
+																)}
+																{need.patient_details && (
+																	<p className="mt-1 text-sm text-pink-100/70 line-clamp-2">{need.patient_details}</p>
+																)}
+																{need.hospital && (
+																	<p className="mt-2 text-sm text-pink-100/70">
+																		Hospital: <span className="font-medium text-white">{need.hospital.name}</span>
+																		{need.hospital.city && ` • ${need.hospital.city}`}
+																	</p>
+																)}
+																{need.quantity_needed && (
+																	<p className="mt-1 text-sm text-pink-100/70">
+																		Quantity Needed: <span className="font-medium text-white">{need.quantity_needed} units</span>
+																	</p>
+																)}
+																{neededByDate && (
+																	<p className={`mt-1 text-sm font-medium ${
+																		daysUntilNeeded !== null && daysUntilNeeded <= 1 ? "text-red-300" :
+																		daysUntilNeeded !== null && daysUntilNeeded <= 3 ? "text-yellow-300" : "text-pink-100/70"
+																	}`}>
+																		Needed by: {neededByDate.toLocaleDateString()} {neededByDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+																		{daysUntilNeeded !== null && daysUntilNeeded >= 0 && (
+																			<span className="ml-2">
+																				({daysUntilNeeded === 0 ? "Today" : daysUntilNeeded === 1 ? "Tomorrow" : `${daysUntilNeeded} days`})
+																			</span>
+																		)}
+																	</p>
+																)}
+																{need.poster_image && (
+																	<div className="mt-3">
+																		<img 
+																			src={need.poster_image} 
+																			alt="Patient poster" 
+																			className="max-w-xs rounded-lg border border-[#F6D6E3]/20"
+																			onError={(e) => { e.target.style.display = 'none' }}
+																		/>
+																	</div>
+																)}
+															</div>
+														</div>
+													</li>
+												)
+											})}
 										</ul>
 									) : (
 										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">

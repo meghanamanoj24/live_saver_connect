@@ -1,399 +1,263 @@
 import Head from "next/head"
 import Link from "next/link"
+import { useRouter } from "next/router"
 import { useState, useEffect } from "react"
 import { apiFetch } from "../../lib/api"
 
-const DONATION_REQUESTS_STORAGE_KEY = "lifesaver:donation_requests"
-
 export default function HospitalRequests() {
-	const [requests, setRequests] = useState([])
+	const router = useRouter()
+	const { id } = router.query
+	const [hospital, setHospital] = useState(null)
+	const [donationRequests, setDonationRequests] = useState([])
 	const [loading, setLoading] = useState(true)
-	const [selectedHospital, setSelectedHospital] = useState(null)
-	const [hospitals, setHospitals] = useState([])
-	const [message, setMessage] = useState("")
+	const [selectedRequest, setSelectedRequest] = useState(null)
+	const [rescheduleForm, setRescheduleForm] = useState({ date: "", time: "" })
 
 	useEffect(() => {
-		loadHospitals()
-	}, [])
-
-	useEffect(() => {
-		if (selectedHospital) {
-			loadRequests()
+		if (id) {
+			loadData()
 		}
-	}, [selectedHospital])
+	}, [id])
 
-	async function loadHospitals() {
-		try {
-			const data = await apiFetch("/hospitals/")
-			setHospitals(data)
-			if (data.length > 0) {
-				setSelectedHospital(data[0].id)
-			}
-		} catch (error) {
-			// Fallback: Use localStorage or hardcoded hospitals
-			const hardcodedHospitals = [
-				{ id: 1, name: "City General Hospital", city: "Metro City" },
-				{ id: 2, name: "Mercy Heart Institute", city: "Downtown" },
-				{ id: 3, name: "Hope Blood Services", city: "Lakeside" },
-			]
-			setHospitals(hardcodedHospitals)
-			if (hardcodedHospitals.length > 0) {
-				setSelectedHospital(hardcodedHospitals[0].id)
-			}
-		}
-	}
-
-	async function loadRequests() {
-		if (!selectedHospital) return
+	async function loadData() {
 		setLoading(true)
 		try {
-			const data = await apiFetch(`/donation-requests/?hospital=${selectedHospital}`)
-			setRequests(data)
-			
-			// Also sync to localStorage
-			if (typeof window !== "undefined") {
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				localStorage.setItem(hospitalStorageKey, JSON.stringify(data))
+			let hospitalData
+			try {
+				hospitalData = await apiFetch("/hospitals/me/")
+			} catch {
+				hospitalData = await apiFetch(`/hospitals/${id}/`)
 			}
+			setHospital(hospitalData)
+			await loadDonationRequests(hospitalData.id || id)
 		} catch (error) {
-			// Fallback: Load from localStorage
-			if (typeof window !== "undefined") {
-				// First check hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					try {
-						setRequests(JSON.parse(hospitalStored))
-						return
-					} catch (e) {
-						// Continue to general storage
-					}
-				}
-				
-				// Check general donation requests storage
-				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
-				if (stored) {
-					try {
-						const allRequests = JSON.parse(stored)
-						const filtered = allRequests.filter((r) => 
-							r.hospital?.id === selectedHospital || 
-							r.hospital_id === selectedHospital ||
-							(r.hospital && r.hospital.id === selectedHospital)
-						)
-						setRequests(filtered)
-					} catch (e) {
-						setRequests([])
-					}
-				} else {
-					setRequests([])
-				}
-			}
+			console.error("Error loading data:", error)
 		} finally {
 			setLoading(false)
 		}
 	}
 
-	async function handleAccept(requestId) {
-		setMessage("")
+	async function loadDonationRequests(hospitalId) {
+		try {
+			const data = await apiFetch(`/donation-requests/?hospital=${hospitalId}`)
+			setDonationRequests(data)
+		} catch (error) {
+			console.error("Error loading requests:", error)
+			setDonationRequests([])
+		}
+	}
+
+	async function handleAcceptRequest(requestId) {
 		try {
 			await apiFetch(`/donation-requests/${requestId}/accept/`, {
 				method: "POST",
 				body: JSON.stringify({ notes: "" }),
 			})
-			
-			// Update in all localStorage locations
-			if (typeof window !== "undefined") {
-				// Update general storage
-				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
-				if (stored) {
-					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(updated))
-				}
-				
-				// Update hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
-				}
-			}
-			
-			setMessage("Request accepted successfully!")
-			loadRequests()
+			await loadDonationRequests(hospital?.id || id)
+			alert("Request accepted successfully!")
 		} catch (error) {
-			// Fallback: Update in localStorage
-			if (typeof window !== "undefined") {
-				// Update general storage
-				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
-				if (stored) {
-					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(updated))
-				}
-				
-				// Update hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
-				}
-				
-				setMessage("Request accepted successfully!")
-				loadRequests()
-			} else {
-				setMessage("Error accepting request. Please try again.")
-			}
+			alert("Error accepting request. Please try again.")
 		}
 	}
 
-	async function handleReject(requestId) {
-		setMessage("")
+	async function handleRejectRequest(requestId) {
 		try {
 			await apiFetch(`/donation-requests/${requestId}/reject/`, {
 				method: "POST",
 				body: JSON.stringify({ notes: "" }),
 			})
-			
-			// Update in all localStorage locations
-			if (typeof window !== "undefined") {
-				// Update general storage
-				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
-				if (stored) {
-					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(updated))
-				}
-				
-				// Update hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
-				}
-			}
-			
-			setMessage("Request rejected.")
-			loadRequests()
+			await loadDonationRequests(hospital?.id || id)
+			alert("Request rejected. User can select another date/time.")
 		} catch (error) {
-			// Fallback: Update in localStorage
-			if (typeof window !== "undefined") {
-				// Update general storage
-				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
-				if (stored) {
-					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(updated))
-				}
-				
-				// Update hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${selectedHospital}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map((r) => 
-						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
-				}
-				
-				setMessage("Request rejected.")
-				loadRequests()
-			} else {
-				setMessage("Error rejecting request. Please try again.")
-			}
+			alert("Error rejecting request. Please try again.")
 		}
 	}
 
-	const pendingRequests = requests.filter((r) => r.status === "PENDING")
-	const otherRequests = requests.filter((r) => r.status !== "PENDING")
+	async function handleRescheduleRequest(requestId) {
+		if (!rescheduleForm.date || !rescheduleForm.time) {
+			alert("Please select both date and time")
+			return
+		}
+		try {
+			const appointmentDateTime = `${rescheduleForm.date}T${rescheduleForm.time}`
+			await apiFetch(`/appointments/${requestId}/`, {
+				method: "PATCH",
+				body: JSON.stringify({
+					appointment_date: appointmentDateTime,
+					status: "RESCHEDULED",
+				}),
+			})
+			setSelectedRequest(null)
+			setRescheduleForm({ date: "", time: "" })
+			await loadDonationRequests(hospital?.id || id)
+			alert("Appointment rescheduled successfully!")
+		} catch (error) {
+			alert("Error rescheduling. Please try again.")
+		}
+	}
+
+	if (loading) {
+		return (
+			<main className="min-h-screen bg-[#1A1A2E] text-white flex items-center justify-center">
+				<div className="text-center">
+					<div className="h-12 w-12 animate-spin rounded-full border-4 border-[#E91E63] border-t-transparent mx-auto" />
+					<p className="mt-4 text-pink-100/70">Loading requests...</p>
+				</div>
+			</main>
+		)
+	}
+
+	const pendingRequests = donationRequests.filter(r => r.status === "PENDING")
+	const acceptedRequests = donationRequests.filter(r => r.status === "ACCEPTED")
+	const rejectedRequests = donationRequests.filter(r => r.status === "REJECTED")
 
 	return (
 		<>
 			<Head>
-				<title>Hospital Requests — LifeSaver Connect</title>
-				<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&display=swap" rel="stylesheet" />
+				<title>Requests — {hospital?.name || "Hospital"} Dashboard</title>
 			</Head>
 			<main className="min-h-screen bg-[#1A1A2E] text-white">
-				<header className="border-b border-[#F6D6E3]/30 bg-[#131326]/80 backdrop-blur">
-					<div className="mx-auto flex flex-col gap-3 md:flex-row md:items-center md:justify-between max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-						<div>
-							<h1 className="text-3xl md:text-4xl font-extrabold" style={{ fontFamily: "'Poppins', sans-serif" }}>
-								Hospital Donation Requests
-							</h1>
-							<p className="mt-1 text-sm text-pink-100/80">
-								Review and manage donation requests from donors.
-							</p>
+				<header className="border-b border-[#F6D6E3]/30 bg-[#131326]/80 backdrop-blur sticky top-0 z-10">
+					<div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+						<div className="flex items-center justify-between">
+							<div>
+								<h1 className="text-2xl font-bold text-white">Donation Requests</h1>
+								<p className="text-sm text-pink-100/70">{hospital?.name}</p>
+							</div>
+							<div className="flex gap-2">
+								<Link href={`/hospital/dashboard?id=${id}`} legacyBehavior>
+									<a className="rounded-lg border border-[#F6D6E3] px-4 py-2 text-sm text-pink-100 hover:bg-white/5">
+										Back to Dashboard
+									</a>
+								</Link>
+							</div>
 						</div>
-						<Link href="/" legacyBehavior>
-							<a className="rounded-lg border border-[#F6D6E3] px-4 py-2 text-sm font-medium text-pink-100 hover:bg-white/5 transition">
-								Back to Home
-							</a>
-						</Link>
 					</div>
 				</header>
 
-				<section className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8 space-y-6">
-					{/* Hospital Selection */}
-					<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-						<label className="block text-sm font-medium text-pink-100 mb-2">Select Hospital</label>
-						<select
-							value={selectedHospital || ""}
-							onChange={(e) => setSelectedHospital(Number(e.target.value))}
-							className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-4 py-2 text-white outline-none focus:border-[#E91E63]"
-						>
-							{hospitals.map((hospital) => (
-								<option key={hospital.id} value={hospital.id}>
-									{hospital.name} - {hospital.city}
-								</option>
-							))}
-						</select>
+				<div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+					<div className="mb-6 flex gap-4">
+						<span className="rounded-full bg-yellow-600/20 px-3 py-1 text-sm text-yellow-400">
+							{pendingRequests.length} Pending
+						</span>
+						<span className="rounded-full bg-green-600/20 px-3 py-1 text-sm text-green-400">
+							{acceptedRequests.length} Accepted
+						</span>
+						<span className="rounded-full bg-red-600/20 px-3 py-1 text-sm text-red-400">
+							{rejectedRequests.length} Rejected
+						</span>
 					</div>
 
-					{message && (
-						<div className={`rounded-xl border px-4 py-3 text-sm ${
-							message.includes("accepted") 
-								? "border-green-500/40 bg-green-500/10 text-green-300"
-								: message.includes("rejected")
-								? "border-red-500/40 bg-red-500/10 text-red-300"
-								: "border-[#E91E63]/40 bg-[#E91E63]/10 text-pink-300"
-						}`}>
-							{message}
-						</div>
-					)}
+					<div className="space-y-4">
+						{donationRequests.map((request) => {
+							const donor = request.donor || {}
+							const statusColors = {
+								PENDING: "bg-yellow-600/20 text-yellow-400",
+								ACCEPTED: "bg-green-600/20 text-green-400",
+								REJECTED: "bg-red-600/20 text-red-400",
+								COMPLETED: "bg-blue-600/20 text-blue-400",
+							}
+							const statusColor = statusColors[request.status] || "bg-gray-600/20 text-gray-400"
 
-					{loading ? (
-						<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 text-center text-pink-100/70">
-							Loading requests...
-						</div>
-					) : (
-						<>
-							{/* Pending Requests */}
-							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-								<h2 className="text-xl font-semibold text-white mb-4">
-									Pending Requests ({pendingRequests.length})
-								</h2>
-								{pendingRequests.length > 0 ? (
-									<div className="space-y-4">
-										{pendingRequests.map((request) => {
-											const donor = request.donor || {}
-											return (
-												<div key={request.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-5">
-													<div className="flex items-start justify-between">
-														<div className="flex-1">
-															<h3 className="text-lg font-semibold text-white">
-																{donor.first_name || donor.username || "Donor"} {donor.last_name || ""}
-															</h3>
-															<p className="mt-1 text-sm text-pink-100/70">
-																Email: {donor.email || "Not provided"}
-															</p>
-															{request.message && (
-																<p className="mt-2 text-sm text-pink-100/80">{request.message}</p>
-															)}
-															{request.created_at && (
-																<p className="mt-2 text-xs text-pink-100/60">
-																	Requested: {new Date(request.created_at).toLocaleString()}
-																</p>
-															)}
-														</div>
-														<div className="flex gap-2 ml-4">
-															<button
-																onClick={() => handleAccept(request.id)}
-																className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700"
-															>
-																Accept
-															</button>
-															<button
-																onClick={() => handleReject(request.id)}
-																className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
-															>
-																Reject
-															</button>
-														</div>
-													</div>
-												</div>
-											)
-										})}
-									</div>
-								) : (
-									<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70 text-center">
-										No pending requests at this time.
-									</div>
-								)}
-							</div>
-
-							{/* Other Requests */}
-							{otherRequests.length > 0 && (
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<h2 className="text-xl font-semibold text-white mb-4">
-										Other Requests ({otherRequests.length})
-									</h2>
-									<div className="space-y-4">
-										{otherRequests.map((request) => {
-											const donor = request.donor || {}
-											const statusColors = {
-												ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/40",
-												REJECTED: "bg-red-500/10 text-red-300 border-red-500/40",
-												COMPLETED: "bg-blue-500/10 text-blue-300 border-blue-500/40",
-												CANCELLED: "bg-gray-500/10 text-gray-300 border-gray-500/40",
-											}
-											const statusLabels = {
-												ACCEPTED: "Accepted",
-												REJECTED: "Rejected",
-												COMPLETED: "Completed",
-												CANCELLED: "Cancelled",
-											}
-											return (
-												<div key={request.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-5">
-													<div className="flex items-center justify-between">
-														<div className="flex-1">
-															<h3 className="text-lg font-semibold text-white">
-																{donor.first_name || donor.username || "Donor"} {donor.last_name || ""}
-															</h3>
-															<p className="mt-1 text-sm text-pink-100/70">
-																Email: {donor.email || "Not provided"}
-															</p>
-															{request.created_at && (
-																<p className="mt-2 text-xs text-pink-100/60">
-																	Requested: {new Date(request.created_at).toLocaleString()}
-																</p>
-															)}
-														</div>
-														<span className={`rounded border px-3 py-1 text-xs font-semibold ${statusColors[request.status] || statusColors.ACCEPTED}`}>
-															{statusLabels[request.status] || request.status}
-														</span>
-													</div>
-												</div>
-											)
-										})}
+							return (
+								<div key={request.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
+									<div className="flex items-start justify-between">
+										<div className="flex-1">
+											<div className="flex items-center gap-3 mb-2">
+												<h3 className="text-lg font-semibold text-white">
+													{donor.first_name || donor.username || "Donor"} {donor.last_name || ""}
+												</h3>
+												<span className={`rounded-full px-2 py-1 text-xs font-medium ${statusColor}`}>
+													{request.status || "PENDING"}
+												</span>
+											</div>
+											<p className="mt-1 text-sm text-pink-100/70">Email: {donor.email || "Not provided"}</p>
+											{request.message && <p className="mt-2 text-sm text-pink-100/80">{request.message}</p>}
+											{request.scheduled_date && (
+												<p className="mt-2 text-sm text-pink-100/70">
+													Scheduled: {new Date(request.scheduled_date).toLocaleString()}
+												</p>
+											)}
+											<p className="mt-2 text-xs text-pink-100/60">
+													Requested: {new Date(request.created_at || Date.now()).toLocaleString()}
+											</p>
+										</div>
+										{request.status === "PENDING" && (
+											<div className="flex gap-2 ml-4">
+												<button
+													onClick={() => handleAcceptRequest(request.id)}
+													className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700"
+												>
+													Accept
+												</button>
+												<button
+													onClick={() => handleRejectRequest(request.id)}
+													className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+												>
+													Reject
+												</button>
+											</div>
+										)}
+										{request.status === "REJECTED" && (
+											<button
+												onClick={() => setSelectedRequest(request.id)}
+												className="rounded-lg border border-[#E91E63] px-4 py-2 text-sm text-[#E91E63] hover:bg-[#E91E63]/10"
+											>
+												Reschedule
+											</button>
+										)}
 									</div>
 								</div>
-							)}
-						</>
+							)
+						})}
+					</div>
+
+					{selectedRequest && (
+						<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+							<div className="bg-[#131326] rounded-xl border border-[#F6D6E3]/40 p-6 max-w-md w-full mx-4">
+								<h3 className="text-xl font-bold text-white mb-4">Reschedule Appointment</h3>
+								<div className="space-y-4">
+									<div>
+										<label className="block text-sm font-medium text-pink-100 mb-1">Date</label>
+										<input
+											type="date"
+											value={rescheduleForm.date}
+											onChange={(e) => setRescheduleForm({ ...rescheduleForm, date: e.target.value })}
+											className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+										/>
+									</div>
+									<div>
+										<label className="block text-sm font-medium text-pink-100 mb-1">Time</label>
+										<input
+											type="time"
+											value={rescheduleForm.time}
+											onChange={(e) => setRescheduleForm({ ...rescheduleForm, time: e.target.value })}
+											className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+										/>
+									</div>
+									<div className="flex gap-2">
+										<button
+											onClick={() => handleRescheduleRequest(selectedRequest)}
+											className="flex-1 rounded-lg bg-[#E91E63] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+										>
+											Reschedule
+										</button>
+										<button
+											onClick={() => {
+												setSelectedRequest(null)
+												setRescheduleForm({ date: "", time: "" })
+											}}
+											className="rounded-lg border border-[#F6D6E3] px-4 py-2 text-sm text-pink-100 hover:bg-white/5"
+										>
+											Cancel
+										</button>
+									</div>
+								</div>
+							</div>
+						</div>
 					)}
-				</section>
+				</div>
 			</main>
 		</>
 	)
 }
-

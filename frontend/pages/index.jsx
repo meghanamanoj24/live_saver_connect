@@ -167,18 +167,11 @@ export default function Home() {
 								<p className="mt-4 text-base md:text-lg text-pink-100/90">
 									Find nearby donors, post emergency needs, discover trusted hospitals and doctors, and access medical supplies—fast.
 								</p>
-								<div className="mt-6 flex flex-wrap gap-3">
-									<Link href="/register/donor" legacyBehavior>
-										<a className="inline-flex items-center rounded-md bg-[#E91E63] px-5 py-3 text-white transition hover:opacity-90">
-											Get Started as Donor
+									<Link href="/needs/post" legacyBehavior>
+										<a className="inline-flex items-center rounded-md bg-[#DC2626] px-5 py-3 text-white transition hover:opacity-90">
+											🚨 Post Emergency Request
 										</a>
 									</Link>
-									<Link href="/auth/login" legacyBehavior>
-										<a className="inline-flex items-center rounded-md border border-[#F6D6E3] px-5 py-3 text-pink-100 hover:bg-white/5 transition">
-											Sign in to Dashboard
-										</a>
-									</Link>
-								</div>
 								<p className="mt-3 text-xs text-pink-100/70">
 									Real-time stats and routing powered by the LifeSaver API.
 								</p>

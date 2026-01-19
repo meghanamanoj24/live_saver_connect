@@ -437,13 +437,15 @@ export default function HospitalDashboard() {
 		e.preventDefault()
 		try {
 			// Format datetime for API
-			const eventDateTime = `${eventForm.event_date}T${eventForm.start_time}`
+			const eventDateTime = eventForm.event_date && eventForm.start_time 
+				? `${eventForm.event_date}T${eventForm.start_time}` 
+				: null
 			
-			await apiFetch("/blood-donation-events/", {
+			const response = await apiFetch("/blood-donation-events/", {
 				method: "POST",
 				body: JSON.stringify({
 					...eventForm,
-					hospital_id: hospital.id,
+					hospital_id: hospital?.id || id,
 					event_date: eventDateTime,
 					estimated_donors: parseInt(eventForm.estimated_donors) || 0,
 					latitude: eventForm.latitude ? parseFloat(eventForm.latitude) : null,
@@ -467,10 +469,12 @@ export default function HospitalDashboard() {
 				latitude: "",
 				longitude: "",
 			})
-			loadEvents(hospital.id)
+			await loadEvents(hospital?.id || id)
+			alert("Event created successfully!")
 		} catch (error) {
-			alert("Error creating event. Please try again.")
-			console.error(error)
+			console.error("Error creating event:", error)
+			const errorMessage = error.body?.detail || error.message || "Error creating event. Please try again."
+			alert(errorMessage)
 		}
 	}
 
@@ -536,23 +540,50 @@ export default function HospitalDashboard() {
 					</div>
 				</header>
 
-				{/* Tabs */}
+				{/* Navigation Links */}
 				<div className="border-b border-[#F6D6E3]/30 bg-[#131326]">
 					<div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
 						<nav className="flex space-x-8 overflow-x-auto">
-							{["requests", "needs", "doctors", "appointments", "donors", "events", "location"].map((tab) => (
-								<button
-									key={tab}
-									onClick={() => setActiveTab(tab)}
-									className={`py-4 px-1 border-b-2 font-medium text-sm capitalize transition ${
-										activeTab === tab
-											? "border-[#E91E63] text-[#E91E63]"
-											: "border-transparent text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30"
-									}`}
-								>
-									{tab}
-								</button>
-							))}
+							<Link href={`/hospital/requests?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Requests
+								</a>
+							</Link>
+							<Link href={`/hospital/needs?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Needs
+								</a>
+							</Link>
+							<Link href={`/hospital/doctors?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Doctors
+								</a>
+							</Link>
+							<Link href={`/hospital/appointments?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Appointments
+								</a>
+							</Link>
+							<Link href={`/hospital/donors?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Donors & Patients
+								</a>
+							</Link>
+							<Link href={`/hospital/events?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Events
+								</a>
+							</Link>
+							<Link href={`/hospital/staff?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Staff
+								</a>
+							</Link>
+							<Link href={`/hospital/location?id=${id}`} legacyBehavior>
+								<a className="py-4 px-1 border-b-2 border-transparent font-medium text-sm text-pink-100/70 hover:text-pink-100 hover:border-pink-100/30 transition">
+									Location
+								</a>
+							</Link>
 						</nav>
 					</div>
 				</div>
