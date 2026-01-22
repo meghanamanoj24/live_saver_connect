@@ -123,7 +123,7 @@ class OrganDonor(TimeStampedModel):
 
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="organ_donations")
 	organs = models.CharField(max_length=255, help_text="Comma-separated organ codes, e.g. HEART,KIDNEY")
-	city = models.CharField(max_length=120)
+	city = models.CharField(max_length=120, blank=True)
 	zip_code = models.CharField(max_length=20, blank=True)
 	consent_provided = models.BooleanField(default=False)
 	# Enhanced fields
@@ -238,6 +238,8 @@ class DoctorAvailability(TimeStampedModel):
 
 class Appointment(TimeStampedModel):
 	STATUS_CHOICES = [
+		("PENDING", "Pending"),
+		("APPROVED", "Approved"),
 		("SCHEDULED", "Scheduled"),
 		("COMPLETED", "Completed"),
 		("CANCELLED", "Cancelled"),
@@ -250,7 +252,7 @@ class Appointment(TimeStampedModel):
 	donation_request = models.ForeignKey("DonationRequest", on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
 	appointment_date = models.DateTimeField()
 	appointment_time = models.TimeField(null=True, blank=True, help_text="Specific time slot")
-	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="SCHEDULED")
+	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PENDING")
 	notes = models.TextField(blank=True)
 	charges = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Appointment charges")
 	currency = models.CharField(max_length=8, default="INR")
@@ -482,9 +484,13 @@ class MedicalEssential(TimeStampedModel):
 		],
 		default="SUPPLIER"
 	)
-	contact_person = models.CharField(max_length=200)
-	phone = models.CharField(max_length=32)
-	email = models.EmailField()
+	user = models.OneToOneField(
+	    settings.AUTH_USER_MODEL,
+	    on_delete=models.CASCADE,
+	    null=True,
+	    blank=True,
+	    related_name="medical_essentials"
+	)
 	address = models.TextField()
 	city = models.CharField(max_length=120)
 	zip_code = models.CharField(max_length=20, blank=True)
@@ -508,7 +514,7 @@ class MedicalEssential(TimeStampedModel):
 		super().save(*args, **kwargs)
 
 	def __str__(self):
-		return f"{self.company_name}-{self.contact_person}"
+		return f"{self.company_name}"
 
 
 class MedicalStoreProduct(TimeStampedModel):
@@ -660,8 +666,11 @@ class PatientVisit(TimeStampedModel):
 	]
 	
 
+	patient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="visits")
 	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="patient_visits")
 	doctor = models.ForeignKey("Doctor", on_delete=models.SET_NULL, null=True, blank=True, related_name="patient_visits")
+	payment_status = models.CharField(max_length=16, choices=[("PENDING", "Pending"), ("PAID", "Paid")], default="PENDING")
+	payment_details = models.JSONField(null=True, blank=True, help_text="Store payment transaction details")
 	visit_purpose = models.CharField(max_length=30, choices=VISIT_PURPOSE_CHOICES)
 	visit_date = models.DateTimeField()
 	charges = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)

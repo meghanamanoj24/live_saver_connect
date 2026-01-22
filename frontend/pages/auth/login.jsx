@@ -3,6 +3,7 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useMemo, useState } from "react"
 import { API_BASE_URL } from "../../lib/api"
+import { validateEmail } from "../../lib/validation"
 
 export default function Login() {
 	const [email, setEmail] = useState("")
@@ -24,6 +25,11 @@ export default function Login() {
 
 		if (!email || !password) {
 			setError("Please enter both email and password.")
+			return
+		}
+
+		if (!validateEmail(email)) {
+			setError("Please enter a valid email address.")
 			return
 		}
 
@@ -88,7 +94,7 @@ export default function Login() {
 								{error}
 							</div>
 						)}
-						
+
 						<div>
 							<label className="block text-sm font-medium text-pink-100">Email</label>
 							<input
@@ -135,11 +141,11 @@ export default function Login() {
 								<option value="donor">Donor</option>
 								<option value="hospital">Hospital</option>
 								<option value="medical_essential">Medical Essential</option>
-								</select>
-							</div>
+							</select>
+						</div>
 
-						<button 
-							type="submit" 
+						<button
+							type="submit"
 							disabled={isLoading}
 							className="h-12 w-full rounded-xl bg-[#E91E63] font-semibold text-white transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-70"
 						>

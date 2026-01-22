@@ -4,6 +4,7 @@ import { useRouter } from "next/router"
 import { useEffect, useMemo, useState } from "react"
 
 import { apiFetch } from "../../lib/api"
+import { validatePhone, validateZipCode, validateDateNotInFuture } from "../../lib/validation"
 
 const DONOR_PROFILE_STORAGE_KEY = "lifesaver:donor_profile"
 
@@ -107,10 +108,14 @@ export default function DonorProfile() {
 		if (!form.contactNumber.trim() || !form.city.trim() || !form.zipCode.trim()) {
 			return false
 		}
+		if (!validatePhone(form.contactNumber)) {
+			return false
+		}
+		if (!validateZipCode(form.zipCode)) {
+			return false
+		}
 		if (form.lastDonationDate) {
-			const selected = new Date(form.lastDonationDate)
-			const today = new Date()
-			if (Number.isNaN(selected.getTime()) || selected > today) {
+			if (!validateDateNotInFuture(form.lastDonationDate)) {
 				return false
 			}
 		}
@@ -353,13 +358,12 @@ export default function DonorProfile() {
 
 							{statusMessage && (
 								<div
-									className={`rounded-2xl border px-4 py-3 text-sm ${
-										statusMessage.type === "success"
+									className={`rounded-2xl border px-4 py-3 text-sm ${statusMessage.type === "success"
 											? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
 											: statusMessage.type === "info"
 												? "border-[#4e7fff] bg-[#4e7fff]/10 text-[#d7dcff]"
 												: "border-rose-400 bg-rose-500/10 text-rose-200"
-									}`}
+										}`}
 								>
 									{statusMessage.text}
 								</div>

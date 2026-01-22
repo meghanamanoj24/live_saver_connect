@@ -60,12 +60,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             return data
         else:
             raise serializers.ValidationError("Must include 'email' and 'password'.")
-	
 
+	
 class UserPublicSerializer(serializers.ModelSerializer):
 	class Meta:
 		model = User
-		fields = ["id", "first_name", "last_name", "email"]
+		fields = ["id", "first_name", "last_name", "email", "phone", "blood_group"]
 
 
 class DonorProfileSerializer(serializers.ModelSerializer):
@@ -162,7 +162,7 @@ class HospitalSerializer(serializers.ModelSerializer):
 
 class OrganDonorSerializer(serializers.ModelSerializer):
 	user = UserPublicSerializer(read_only=True)
-	user_id = serializers.PrimaryKeyRelatedField(source="user", write_only=True, queryset=User.objects.all(), required=True)
+	user_id = serializers.PrimaryKeyRelatedField(source="created_by", write_only=True, queryset=User.objects.all(), required=True)
 	selected_hospitals = HospitalSerializer(many=True, read_only=True)
 	selected_hospital_ids = serializers.PrimaryKeyRelatedField(
 		source="selected_hospitals", 
@@ -413,6 +413,7 @@ class DeceasedDonorRequestSerializer(serializers.ModelSerializer):
 		fields = [
 			"id",
 			"requester_name",
+			"hospital_referred","hospital_referred_id",
 			"requester_phone",
 			"requester_email",
 			"requester_relation",
@@ -527,6 +528,9 @@ class MedicalEssentialSerializer(serializers.ModelSerializer):
 	user = UserPublicSerializer(read_only=True)
 	user_id = serializers.PrimaryKeyRelatedField(source="user", write_only=True, queryset=User.objects.all(), required=True)
 	api_key = serializers.CharField(read_only=True)
+	email = serializers.EmailField(source="user.email", read_only=True)
+	phone = serializers.CharField(source="user.phone", required=False)
+	contact_person = serializers.CharField(source="user.first_name")
 
 	class Meta:
 		model = MedicalEssential
@@ -710,6 +714,8 @@ class PatientVisitSerializer(serializers.ModelSerializer):
 			"visit_date",
 			"charges",
 			"currency",
+			"payment_status",
+			"payment_details",
 			"notes",
 			"performance_notes",
 			"created_at",

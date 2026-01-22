@@ -3,6 +3,7 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useEffect, useMemo, useState } from "react"
 import { API_BASE_URL } from "../../lib/api"
+import { validateEmail, validateName, validatePassword, validatePhone } from "../../lib/validation"
 
 export default function Register() {
     const [firstName, setFirstName] = useState("")
@@ -14,7 +15,7 @@ export default function Register() {
     const [gender, setGender] = useState("")
     const [phone, setPhone] = useState("")
     const [donorModule, setDonorModule] = useState("")
-    
+
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState("")
     const router = useRouter()
@@ -35,13 +36,38 @@ export default function Register() {
         e.preventDefault()
         setError("")
 
-        if (password !== confirmPassword) {
-            setError("Passwords do not match")
+        if (!email || !firstName || !lastName || !donorModule || !phone) {
+            setError("Please fill in all required fields.")
             return
         }
 
-        if (!email || !firstName || !lastName || !donorModule) {
-            setError("Please fill in all required fields")
+        if (!validateName(firstName)) {
+            setError("First name should contain only letters and be at least 2 characters long.")
+            return
+        }
+
+        if (!validateName(lastName)) {
+            setError("Last name should contain only letters and be at least 2 characters long.")
+            return
+        }
+
+        if (!validateEmail(email)) {
+            setError("Please enter a valid email address.")
+            return
+        }
+
+        if (!validatePassword(password)) {
+            setError("Password must be at least 8 characters long.")
+            return
+        }
+
+        if (password !== confirmPassword) {
+            setError("Passwords do not match.")
+            return
+        }
+
+        if (!validatePhone(phone)) {
+            setError("Please enter a valid 10-15 digit phone number.")
             return
         }
 
@@ -72,7 +98,7 @@ export default function Register() {
                     body: JSON.stringify({
                         email: email,
                         password: password,
-						donor_module: donorModule
+                        donor_module: donorModule
                     }),
                 })
 
@@ -119,7 +145,7 @@ export default function Register() {
                     <p className="mt-1 text-sm text-pink-100/90">Create your account to get started.</p>
 
                     <form onSubmit={onSubmit} className="mt-6 space-y-4 rounded-xl border border-[#F6D6E3] p-6">
-                        
+
                         {error && (
                             <div className="rounded-lg border border-red-600/60 bg-red-600/10 px-4 py-3 text-sm text-red-300">
                                 {error}
@@ -208,15 +234,15 @@ export default function Register() {
                         />
 
                         <select
-							value={donorModule}
-							onChange={(e) => setDonorModule(e.target.value)}
-							className="inputStyle"
-						>
-							<option value="">Registering For</option>
-							<option value="donor">Donor</option>
-							<option value="hospital">Hospital</option>
-							<option value="medical_essential">Medical Essential</option>
-						</select>
+                            value={donorModule}
+                            onChange={(e) => setDonorModule(e.target.value)}
+                            className="inputStyle"
+                        >
+                            <option value="">Registering For</option>
+                            <option value="donor">Donor</option>
+                            <option value="hospital">Hospital</option>
+                            <option value="medical_essential">Medical Essential</option>
+                        </select>
 
                         <button
                             type="submit"

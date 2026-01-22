@@ -150,7 +150,7 @@ class AppointmentAdmin(admin.ModelAdmin):
 
 @admin.register(MedicalEssential)
 class MedicalEssentialAdmin(admin.ModelAdmin):
-	list_display = ("company_name","business_type", "city", "is_active", "is_verified", "api_key_created_at")
+	list_display = ("user", "business_type", "city", "is_active", "is_verified", "api_key_created_at")
 	search_fields = ("company_name","contact_person", "city", "license_number")
 	list_filter = ("business_type", "is_active", "is_verified")
 	readonly_fields = ("api_key", "api_key_created_at", "created_at", "updated_at")

@@ -26,6 +26,7 @@ export default function HospitalEvents() {
 		organizer: "",
 		latitude: "",
 		longitude: "",
+		image_url: "",
 	})
 
 	useEffect(() => {
@@ -65,10 +66,10 @@ export default function HospitalEvents() {
 	async function handleSubmitEvent(e) {
 		e.preventDefault()
 		try {
-			const eventDateTime = eventForm.event_date && eventForm.start_time 
-				? `${eventForm.event_date}T${eventForm.start_time}` 
+			const eventDateTime = eventForm.event_date && eventForm.start_time
+				? `${eventForm.event_date}T${eventForm.start_time}`
 				: null
-			
+
 			await apiFetch("/blood-donation-events/", {
 				method: "POST",
 				body: JSON.stringify({
@@ -96,6 +97,7 @@ export default function HospitalEvents() {
 				organizer: "",
 				latitude: "",
 				longitude: "",
+				image_url: "",
 			})
 			await loadEvents(hospital?.id || id)
 			alert("Event created successfully!")
@@ -228,12 +230,13 @@ export default function HospitalEvents() {
 										className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
 									/>
 								</div>
-								<div>
-									<label className="block text-sm font-medium text-pink-100 mb-1">Contact Email</label>
+								<div className="md:col-span-2">
+									<label className="block text-sm font-medium text-pink-100 mb-1">Event Image URL</label>
 									<input
-										type="email"
-										value={eventForm.contact_email}
-										onChange={(e) => setEventForm({ ...eventForm, contact_email: e.target.value })}
+										type="url"
+										value={eventForm.image_url}
+										onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })}
+										placeholder="https://example.com/event-image.jpg"
 										className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
 									/>
 								</div>
@@ -255,12 +258,28 @@ export default function HospitalEvents() {
 						) : (
 							events.map((event) => (
 								<div key={event.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
-									<div className="flex items-start justify-between">
+									<div className="flex flex-col md:flex-row gap-6">
+										{event.image_url && (
+											<div className="w-full md:w-48 h-32 rounded-lg overflow-hidden border border-[#F6D6E3]/20">
+												<img src={event.image_url} alt={event.title} className="w-full h-full object-cover" />
+											</div>
+										)}
 										<div className="flex-1">
-											<h3 className="text-lg font-semibold text-white">{event.title}</h3>
-											{event.description && (
-												<p className="mt-2 text-sm text-pink-100/70">{event.description}</p>
-											)}
+											<div className="flex items-start justify-between">
+												<div>
+													<h3 className="text-lg font-semibold text-white">{event.title}</h3>
+													{event.description && (
+														<p className="mt-2 text-sm text-pink-100/70">{event.description}</p>
+													)}
+												</div>
+												<span className={`rounded-full px-2 py-1 text-xs font-medium ${event.status === "UPCOMING" ? "bg-blue-600/20 text-blue-400" :
+														event.status === "ONGOING" ? "bg-green-600/20 text-green-400" :
+															event.status === "COMPLETED" ? "bg-gray-600/20 text-gray-400" :
+																"bg-yellow-600/20 text-yellow-400"
+													}`}>
+													{event.status || "UPCOMING"}
+												</span>
+											</div>
 											<div className="mt-3 grid gap-2 sm:grid-cols-2">
 												{event.event_date && (
 													<p className="text-sm text-pink-100/70">
@@ -282,14 +301,6 @@ export default function HospitalEvents() {
 												)}
 											</div>
 										</div>
-										<span className={`rounded-full px-2 py-1 text-xs font-medium ${
-											event.status === "UPCOMING" ? "bg-blue-600/20 text-blue-400" :
-											event.status === "ONGOING" ? "bg-green-600/20 text-green-400" :
-											event.status === "COMPLETED" ? "bg-gray-600/20 text-gray-400" :
-											"bg-yellow-600/20 text-yellow-400"
-										}`}>
-											{event.status || "UPCOMING"}
-										</span>
 									</div>
 								</div>
 							))

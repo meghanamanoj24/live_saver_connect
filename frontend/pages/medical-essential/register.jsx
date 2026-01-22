@@ -2,6 +2,7 @@ import Head from "next/head"
 import { useRouter } from "next/router"
 import { useState } from "react"
 import { apiFetch } from "../../lib/api"
+import { validateEmail, validatePhone, validateZipCode } from "../../lib/validation"
 
 export default function MedicalEssentialRegister() {
 	const router = useRouter()
@@ -23,6 +24,32 @@ export default function MedicalEssentialRegister() {
 	async function handleSubmit(e) {
 		e.preventDefault()
 		setError("")
+
+		if (!formData.company_name || formData.company_name.length < 3) {
+			setError("Please enter a valid company name (min 3 characters).")
+			return
+		}
+
+		if (!formData.contact_person || formData.contact_person.length < 2) {
+			setError("Please enter a valid contact person name.")
+			return
+		}
+
+		if (!validateEmail(formData.email)) {
+			setError("Please enter a valid email address.")
+			return
+		}
+
+		if (!validatePhone(formData.phone)) {
+			setError("Please enter a valid 10-15 digit phone number.")
+			return
+		}
+
+		if (formData.zip_code && !validateZipCode(formData.zip_code)) {
+			setError("Please enter a valid zip code (5-6 digits).")
+			return
+		}
+
 		setLoading(true)
 
 		try {

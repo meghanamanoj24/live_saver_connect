@@ -11,6 +11,7 @@ export default function HospitalAppointments() {
 	const [appointments, setAppointments] = useState([])
 	const [doctors, setDoctors] = useState([])
 	const [loading, setLoading] = useState(true)
+	const [actionLoading, setActionLoading] = useState(null)
 
 	useEffect(() => {
 		if (id) {
@@ -60,6 +61,38 @@ export default function HospitalAppointments() {
 		}
 	}
 
+	async function handleAcceptAppointment(appointmentId) {
+		setActionLoading(appointmentId)
+		try {
+			await apiFetch(`/appointments/${appointmentId}/accept/`, {
+				method: "POST",
+				body: JSON.stringify({ notes: "Appointment approved by hospital" }),
+			})
+			await loadAppointments(hospital?.id || id)
+			alert("Appointment approved successfully!")
+		} catch (error) {
+			alert("Error approving appointment. Please try again.")
+		} finally {
+			setActionLoading(null)
+		}
+	}
+
+	async function handleRejectAppointment(appointmentId) {
+		setActionLoading(appointmentId)
+		try {
+			await apiFetch(`/appointments/${appointmentId}/reject/`, {
+				method: "POST",
+				body: JSON.stringify({ notes: "Appointment rejected by hospital" }),
+			})
+			await loadAppointments(hospital?.id || id)
+			alert("Appointment rejected.")
+		} catch (error) {
+			alert("Error rejecting appointment. Please try again.")
+		} finally {
+			setActionLoading(null)
+		}
+	}
+
 	if (loading) {
 		return (
 			<main className="min-h-screen bg-[#1A1A2E] text-white flex items-center justify-center">
@@ -97,12 +130,18 @@ export default function HospitalAppointments() {
 				</header>
 
 				<div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-					<div className="mb-6 flex gap-4">
-						<span className="rounded-full bg-blue-600/20 px-3 py-1 text-sm text-blue-400">
-							{scheduledAppointments.length} Scheduled
+					<div className="mb-6 flex flex-wrap gap-4">
+						<span className="rounded-full bg-yellow-600/20 px-3 py-1 text-sm text-yellow-400">
+							{appointments.filter(a => a.status === "PENDING").length} Pending
 						</span>
 						<span className="rounded-full bg-green-600/20 px-3 py-1 text-sm text-green-400">
-							{completedAppointments.length} Completed
+							{appointments.filter(a => a.status === "APPROVED").length} Approved
+						</span>
+						<span className="rounded-full bg-blue-600/20 px-3 py-1 text-sm text-blue-400">
+							{appointments.filter(a => a.status === "SCHEDULED").length} Scheduled
+						</span>
+						<span className="rounded-full bg-gray-600/20 px-3 py-1 text-sm text-gray-400">
+							{appointments.filter(a => a.status === "COMPLETED").length} Completed
 						</span>
 					</div>
 
@@ -111,10 +150,12 @@ export default function HospitalAppointments() {
 							const donor = appointment.donor || {}
 							const doctor = appointment.doctor || {}
 							const statusColors = {
+								PENDING: "bg-yellow-600/20 text-yellow-400",
+								APPROVED: "bg-green-600/20 text-green-400",
 								SCHEDULED: "bg-blue-600/20 text-blue-400",
-								COMPLETED: "bg-green-600/20 text-green-400",
+								COMPLETED: "bg-indigo-600/20 text-indigo-400",
 								CANCELLED: "bg-red-600/20 text-red-400",
-								RESCHEDULED: "bg-yellow-600/20 text-yellow-400",
+								RESCHEDULED: "bg-orange-600/20 text-orange-400",
 							}
 							const statusColor = statusColors[appointment.status] || "bg-gray-600/20 text-gray-400"
 
@@ -156,6 +197,24 @@ export default function HospitalAppointments() {
 												Created: {new Date(appointment.created_at || Date.now()).toLocaleString()}
 											</p>
 										</div>
+										{appointment.status === "PENDING" && (
+											<div className="flex gap-2 ml-4">
+												<button
+													disabled={actionLoading === appointment.id}
+													onClick={() => handleAcceptAppointment(appointment.id)}
+													className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-50"
+												>
+													Approve
+												</button>
+												<button
+													disabled={actionLoading === appointment.id}
+													onClick={() => handleRejectAppointment(appointment.id)}
+													className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+												>
+													Reject
+												</button>
+											</div>
+										)}
 									</div>
 								</div>
 							)

@@ -3,6 +3,7 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "../../lib/api"
+import { validatePhone, validateDateNotInFuture } from "../../lib/validation"
 
 const ORGAN_OPTIONS = [
 	{ id: "HEART", label: "Heart" },
@@ -93,18 +94,18 @@ export default function OrganRegistry() {
 			setCheckingAuth(false)
 		}
 		checkAuth()
-		
+
 		const handleStorageChange = () => checkAuth()
 		const handleFocus = () => checkAuth()
 		window.addEventListener("storage", handleStorageChange)
 		window.addEventListener("focus", handleFocus)
-		
+
 		return () => {
 			window.removeEventListener("storage", handleStorageChange)
 			window.removeEventListener("focus", handleFocus)
 		}
 	}, [])
-	
+
 	useEffect(() => {
 		if (router.isReady) {
 			const token = localStorage.getItem("accessToken")
@@ -125,7 +126,7 @@ export default function OrganRegistry() {
 						longitude: position.coords.longitude,
 					})
 				},
-				() => {}
+				() => { }
 			)
 		}
 	}, [])
@@ -139,7 +140,11 @@ export default function OrganRegistry() {
 			try {
 				// Load organ donor profile
 				try {
-					const profile = await apiFetch("/organ-donors/me/")
+					const [profile, userProfile] = await Promise.all([
+						apiFetch("/organ-donors/me/").catch(() => null),
+						apiFetch("/auth/users/me/").catch(() => null)
+					]);
+
 					if (!cancelled && profile) {
 						setPledgeStatus(profile)
 						setForm({
@@ -151,13 +156,21 @@ export default function OrganRegistry() {
 							medical_student_donation: profile.medical_student_donation || false,
 							selected_hospitals: profile.selected_hospitals?.map(h => h.id) || [],
 							date_of_birth: profile.date_of_birth || "",
-							blood_group: profile.blood_group || "",
-							phone: profile.phone || "",
+							// Fallback to user profile if organ profile fields are empty
+							blood_group: profile.blood_group || userProfile?.blood_group || "",
+							phone: profile.phone || userProfile?.phone || "",
 							address: profile.address || "",
 							emergency_contact_name: profile.emergency_contact_name || "",
 							emergency_contact_phone: profile.emergency_contact_phone || "",
 							emergency_contact_relation: profile.emergency_contact_relation || "",
 						})
+					} else if (!cancelled && userProfile) {
+						// Profile doesn't exist, pre-fill from user profile
+						setForm(prev => ({
+							...prev,
+							blood_group: userProfile.blood_group || "",
+							phone: userProfile.phone || "",
+						}));
 					}
 				} catch (e) {
 					if (!cancelled) setPledgeStatus(null)
@@ -239,7 +252,7 @@ export default function OrganRegistry() {
 	async function handlePledgeSubmit(event) {
 		event.preventDefault()
 		setFeedback(null)
-		
+
 		if (!form.post_mortem_consent || !form.acknowledgement) {
 			setFeedback({
 				type: "error",
@@ -252,6 +265,38 @@ export default function OrganRegistry() {
 			setFeedback({
 				type: "error",
 				message: "Please select at least one organ to donate.",
+			})
+			return
+		}
+
+		if (form.phone && !validatePhone(form.phone)) {
+			setFeedback({
+				type: "error",
+				message: "Please enter a valid 10-15 digit phone number.",
+			})
+			return
+		}
+
+		if (form.date_of_birth && !validateDateNotInFuture(form.date_of_birth)) {
+			setFeedback({
+				type: "error",
+				message: "Date of birth cannot be in the future.",
+			})
+			return
+		}
+
+		if (form.emergency_contact_phone && !validatePhone(form.emergency_contact_phone)) {
+			setFeedback({
+				type: "error",
+				message: "Please enter a valid 10-15 digit phone number for the emergency contact.",
+			})
+			return
+		}
+
+		if (form.phone && form.emergency_contact_phone && form.phone === form.emergency_contact_phone) {
+			setFeedback({
+				type: "error",
+				message: "Emergency contact number cannot be the same as your phone number.",
 			})
 			return
 		}
@@ -344,6 +389,175 @@ export default function OrganRegistry() {
 		}
 	}
 
+	async function generatePledgeReport() {
+		try {
+			const { jsPDF } = await import("jspdf");
+			const doc = new jsPDF({
+				orientation: "portrait",
+				unit: "mm",
+				format: "a4"
+			});
+
+			const margin = 20;
+			const pageWidth = doc.internal.pageSize.getWidth();
+			const pageHeight = doc.internal.pageSize.getHeight();
+
+			// --- Official Background ---
+			doc.setFillColor(255, 255, 255);
+			doc.rect(0, 0, pageWidth, pageHeight, "F");
+
+			// Border
+			doc.setDrawColor(233, 30, 99);
+			doc.setLineWidth(1);
+			doc.rect(margin, margin, pageWidth - (margin * 2), pageHeight - (margin * 2), "S");
+
+			// --- Header ---
+			doc.setFillColor(26, 26, 46); // Dark primary
+			doc.rect(margin, margin, pageWidth - (margin * 2), 40, "F");
+
+			doc.setFontSize(24);
+			doc.setTextColor(255, 255, 255);
+			doc.setFont("helvetica", "bold");
+			doc.text("LIFESAVER CONNECT", margin + 10, margin + 20);
+
+			doc.setFontSize(14);
+			doc.setTextColor(233, 30, 99); // Pink
+			doc.text("OFFICIAL ORGAN DONATION PLEDGE", margin + 10, margin + 30);
+
+			doc.setFontSize(10);
+			doc.setTextColor(255, 255, 255);
+			doc.text(`Pledge ID: #${pledgeStatus?.id || "PENDING"}`, pageWidth - margin - 10, margin + 20, { align: "right" });
+			doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth - margin - 10, margin + 30, { align: "right" });
+
+			let yPos = margin + 55;
+
+			// --- Donor Details ---
+			doc.setFontSize(16);
+			doc.setTextColor(26, 26, 46);
+			doc.setFont("helvetica", "bold");
+			doc.text("I. DONOR INFORMATION", margin + 10, yPos);
+
+			doc.setDrawColor(200, 200, 200);
+			doc.setLineWidth(0.5);
+			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
+
+			yPos += 15;
+			doc.setFontSize(11);
+			doc.setFont("helvetica", "normal");
+			doc.setTextColor(60, 60, 60);
+
+			const details = [
+				{ label: "Blood Group", value: form.blood_group || "N/A" },
+				{ label: "Date of Birth", value: form.date_of_birth || "N/A" },
+				{ label: "Phone", value: form.phone || "N/A" },
+				{ label: "Address", value: doc.splitTextToSize(form.address || "N/A", 100) },
+			];
+
+			details.forEach(item => {
+				doc.setFont("helvetica", "bold");
+				doc.text(`${item.label}:`, margin + 15, yPos);
+				doc.setFont("helvetica", "normal");
+				if (Array.isArray(item.value)) {
+					doc.text(item.value, margin + 60, yPos);
+					yPos += (item.value.length * 6) + 4;
+				} else {
+					doc.text(item.value, margin + 60, yPos);
+					yPos += 8;
+				}
+			});
+
+			yPos += 10;
+			// --- Emergency Contact ---
+			doc.setFontSize(16);
+			doc.setTextColor(26, 26, 46);
+			doc.setFont("helvetica", "bold");
+			doc.text("II. EMERGENCY CONTACT", margin + 10, yPos);
+			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
+
+			yPos += 15;
+			doc.setFontSize(11);
+			doc.setFont("helvetica", "normal");
+
+			doc.setFont("helvetica", "bold");
+			doc.text("Name:", margin + 15, yPos);
+			doc.setFont("helvetica", "normal");
+			doc.text(form.emergency_contact_name || "N/A", margin + 60, yPos);
+
+			yPos += 8;
+			doc.setFont("helvetica", "bold");
+			doc.text("Phone:", margin + 15, yPos);
+			doc.setFont("helvetica", "normal");
+			doc.text(form.emergency_contact_phone || "N/A", margin + 60, yPos);
+
+			yPos += 8;
+			doc.setFont("helvetica", "bold");
+			doc.text("Relation:", margin + 15, yPos);
+			doc.setFont("helvetica", "normal");
+			doc.text(form.emergency_contact_relation || "N/A", margin + 60, yPos);
+
+
+			yPos += 20;
+			// --- Pledge Details ---
+			doc.setFontSize(16);
+			doc.setTextColor(26, 26, 46);
+			doc.setFont("helvetica", "bold");
+			doc.text("III. PLEDGE COMMITMENT", margin + 10, yPos);
+			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
+
+			yPos += 15;
+			doc.setFillColor(233, 30, 99, 0.1); // Light pink
+			doc.setDrawColor(233, 30, 99);
+			doc.roundedRect(margin + 10, yPos - 5, pageWidth - (margin * 2) - 20, 30, 2, 2, "FD");
+
+			doc.setFontSize(12);
+			doc.setTextColor(233, 30, 99);
+			doc.text("Organs Pledged:", margin + 20, yPos + 5);
+
+			const organsList = form.organs_to_donate.includes("ALL") ? "ALL ORGANS" : form.organs_to_donate.join(", ");
+			doc.setFontSize(14);
+			doc.setTextColor(26, 26, 46);
+			doc.text(organsList, margin + 20, yPos + 15);
+
+			yPos += 40;
+			// --- Declaration ---
+			doc.setFontSize(10);
+			doc.setTextColor(100, 100, 100);
+			const declaration = "I hereby pledge to donate my organs after my death for therapeutic purposes. I understand that this pledge is voluntary and can be withdrawn at any time. I have informed my family about this decision.";
+			const splitDec = doc.splitTextToSize(declaration, pageWidth - (margin * 2) - 20);
+			doc.text(splitDec, margin + 10, yPos);
+
+			// --- Signatures ---
+			const sealY = pageHeight - margin - 50;
+
+			// Seal
+			const sealX = pageWidth - margin - 40;
+			doc.setDrawColor(233, 30, 99);
+			doc.setLineWidth(1.5);
+			doc.circle(sealX, sealY, 18, "S");
+			doc.circle(sealX, sealY, 16, "S");
+			doc.setFontSize(8);
+			doc.setTextColor(233, 30, 99);
+			doc.setFont("helvetica", "bold");
+			doc.text("LIFESAVER", sealX, sealY - 8, { align: "center" });
+			doc.text("REGISTERED", sealX, sealY + 10, { align: "center" });
+			doc.setFontSize(6);
+			doc.text("VERIFIED PLEDGE", sealX, sealY, { align: "center" });
+
+			// Donor Sig
+			doc.setDrawColor(0, 0, 0);
+			doc.setLineWidth(0.5);
+			doc.line(margin + 10, sealY + 10, margin + 70, sealY + 10);
+			doc.setFontSize(10);
+			doc.setTextColor(0, 0, 0);
+			doc.text("Donor Signature", margin + 40, sealY + 16, { align: "center" });
+
+			doc.save("Organ_Donation_Pledge_Report.pdf");
+
+		} catch (err) {
+			console.error(err);
+			alert("Error generating report. Please try again.");
+		}
+	}
 	function startEditing() {
 		if (!pledgeStatus) return
 		setIsEditing(true)
@@ -447,11 +661,10 @@ export default function OrganRegistry() {
 						<section className="mt-12">
 							{feedback && (
 								<div
-									className={`mb-8 flex items-start justify-between gap-4 rounded-2xl border px-4 py-4 text-sm sm:text-base ${
-										feedback.type === "success"
-											? "border-[#22C55E]/60 bg-[#22C55E]/10 text-[#A7F3D0]"
-											: "border-[#DC2626]/60 bg-[#DC2626]/10 text-[#FCA5A5]"
-									}`}
+									className={`mb-8 flex items-start justify-between gap-4 rounded-2xl border px-4 py-4 text-sm sm:text-base ${feedback.type === "success"
+										? "border-[#22C55E]/60 bg-[#22C55E]/10 text-[#A7F3D0]"
+										: "border-[#DC2626]/60 bg-[#DC2626]/10 text-[#FCA5A5]"
+										}`}
 								>
 									<span>{feedback.message}</span>
 									<button
@@ -468,41 +681,37 @@ export default function OrganRegistry() {
 							<div className="mb-8 flex flex-wrap gap-2 border-b border-[#F6D6E3]/20">
 								<button
 									onClick={() => setActiveTab("pledge")}
-									className={`px-4 py-2 text-sm font-semibold transition ${
-										activeTab === "pledge"
-											? "border-b-2 border-[#E91E63] text-[#E91E63]"
-											: "text-pink-100/70 hover:text-white"
-									}`}
+									className={`px-4 py-2 text-sm font-semibold transition ${activeTab === "pledge"
+										? "border-b-2 border-[#E91E63] text-[#E91E63]"
+										: "text-pink-100/70 hover:text-white"
+										}`}
 								>
 									My Pledge
 								</button>
 								<button
 									onClick={() => setActiveTab("deceased")}
-									className={`px-4 py-2 text-sm font-semibold transition ${
-										activeTab === "deceased"
-											? "border-b-2 border-[#E91E63] text-[#E91E63]"
-											: "text-pink-100/70 hover:text-white"
-									}`}
+									className={`px-4 py-2 text-sm font-semibold transition ${activeTab === "deceased"
+										? "border-b-2 border-[#E91E63] text-[#E91E63]"
+										: "text-pink-100/70 hover:text-white"
+										}`}
 								>
 									Deceased Donor Request
 								</button>
 								<button
 									onClick={() => setActiveTab("emergencies")}
-									className={`px-4 py-2 text-sm font-semibold transition ${
-										activeTab === "emergencies"
-											? "border-b-2 border-[#E91E63] text-[#E91E63]"
-											: "text-pink-100/70 hover:text-white"
-									}`}
+									className={`px-4 py-2 text-sm font-semibold transition ${activeTab === "emergencies"
+										? "border-b-2 border-[#E91E63] text-[#E91E63]"
+										: "text-pink-100/70 hover:text-white"
+										}`}
 								>
 									Emergency Cases
 								</button>
 								<button
 									onClick={() => setActiveTab("accidents")}
-									className={`px-4 py-2 text-sm font-semibold transition ${
-										activeTab === "accidents"
-											? "border-b-2 border-[#E91E63] text-[#E91E63]"
-											: "text-pink-100/70 hover:text-white"
-									}`}
+									className={`px-4 py-2 text-sm font-semibold transition ${activeTab === "accidents"
+										? "border-b-2 border-[#E91E63] text-[#E91E63]"
+										: "text-pink-100/70 hover:text-white"
+										}`}
 								>
 									Accident Alerts
 								</button>
@@ -527,6 +736,41 @@ export default function OrganRegistry() {
 														className="inline-flex items-center rounded-lg bg-[#E91E63] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
 													>
 														Modify Pledge
+													</button>
+													<button
+														type="button"
+														onClick={generatePledgeReport}
+														className="inline-flex items-center rounded-lg border border-[#E91E63] px-4 py-2 text-sm font-semibold text-[#E91E63] transition hover:bg-[#E91E63]/10"
+													>
+														Download Report
+													</button>
+													<button
+														type="button"
+														onClick={async () => {
+															try {
+																const res = await apiFetch("/organ-donors/me/notify_contact/", { method: "POST" });
+																setFeedback({ type: "success", message: res.message });
+															} catch (err) {
+																setFeedback({ type: "error", message: err.message || "Failed to notify contact." });
+															}
+														}}
+														className="inline-flex items-center rounded-lg border border-blue-500/50 px-4 py-2 text-sm font-semibold text-blue-300 transition hover:bg-blue-500/10"
+													>
+														Notify Emergency Contact
+													</button>
+													<button
+														type="button"
+														onClick={async () => {
+															try {
+																const res = await apiFetch("/organ-donors/me/notify_hospitals/", { method: "POST" });
+																setFeedback({ type: "success", message: res.message });
+															} catch (err) {
+																setFeedback({ type: "error", message: err.message || "Failed to transmit report to hospitals." });
+															}
+														}}
+														className="inline-flex items-center rounded-lg border border-green-500/50 px-4 py-2 text-sm font-semibold text-green-300 transition hover:bg-green-500/10"
+													>
+														Send to Hospital
 													</button>
 													<button
 														type="button"
@@ -589,30 +833,22 @@ export default function OrganRegistry() {
 														</div>
 														<div>
 															<label className="block text-sm font-medium text-pink-100 mb-1">Blood Group</label>
-															<select
+															<input
+																type="text"
 																value={form.blood_group}
-																onChange={(e) => setForm((prev) => ({ ...prev, blood_group: e.target.value }))}
-																className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
-															>
-																<option value="">Select</option>
-																<option value="A+">A+</option>
-																<option value="A-">A-</option>
-																<option value="B+">B+</option>
-																<option value="B-">B-</option>
-																<option value="AB+">AB+</option>
-																<option value="AB-">AB-</option>
-																<option value="O+">O+</option>
-																<option value="O-">O-</option>
-															</select>
+																readOnly
+																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/70 outline-none cursor-not-allowed"
+																title="Managed via your Profile"
+															/>
 														</div>
 														<div>
 															<label className="block text-sm font-medium text-pink-100 mb-1">Phone</label>
 															<input
 																type="tel"
 																value={form.phone}
-																onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
-																className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
-																placeholder="+91 98765 43210"
+																readOnly
+																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/70 outline-none cursor-not-allowed"
+																title="Managed via your Profile"
 															/>
 														</div>
 														<div className="sm:col-span-2">
@@ -699,11 +935,10 @@ export default function OrganRegistry() {
 														{ORGAN_OPTIONS.map((organ) => (
 															<label
 																key={organ.id}
-																className={`flex cursor-pointer items-start gap-3 rounded-2xl border bg-[#1A1A2E] p-4 transition ${
-																	selectedOrgansSet.has(organ.id)
-																		? "border-[#E91E63] shadow-[0_15px_35px_rgba(233,30,99,0.25)]"
-																		: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
-																}`}
+																className={`flex cursor-pointer items-start gap-3 rounded-2xl border bg-[#1A1A2E] p-4 transition ${selectedOrgansSet.has(organ.id)
+																	? "border-[#E91E63] shadow-[0_15px_35px_rgba(233,30,99,0.25)]"
+																	: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
+																	}`}
 															>
 																<input
 																	type="checkbox"
@@ -737,11 +972,10 @@ export default function OrganRegistry() {
 															{hospitals.map((hospital) => (
 																<label
 																	key={hospital.id}
-																	className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${
-																		form.selected_hospitals.includes(hospital.id)
-																			? "border-[#E91E63] bg-[#E91E63]/10"
-																			: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
-																	}`}
+																	className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${form.selected_hospitals.includes(hospital.id)
+																		? "border-[#E91E63] bg-[#E91E63]/10"
+																		: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
+																		}`}
 																>
 																	<input
 																		type="checkbox"
@@ -893,7 +1127,10 @@ export default function OrganRegistry() {
 														<div className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-4">
 															<p className="text-xs uppercase tracking-wide text-pink-100/50">Pledge Date</p>
 															<p className="mt-2 text-base font-medium text-white">
-																{pledgeStatus?.created_at ? new Date(pledgeStatus.created_at).toLocaleDateString() : "Not recorded"}
+																{pledgeStatus?.created_at ? (() => {
+																	const d = new Date(pledgeStatus.created_at);
+																	return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+																})() : "Not recorded"}
 															</p>
 														</div>
 														{pledgeStatus?.living_kidney_donation && (
@@ -1100,11 +1337,10 @@ export default function OrganRegistry() {
 												{ORGAN_OPTIONS.filter(o => o.id !== "ALL").map((organ) => (
 													<label
 														key={organ.id}
-														className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${
-															deceasedForm.organs_available.includes(organ.id)
-																? "border-[#E91E63] bg-[#E91E63]/10"
-																: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
-														}`}
+														className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${deceasedForm.organs_available.includes(organ.id)
+															? "border-[#E91E63] bg-[#E91E63]/10"
+															: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
+															}`}
 													>
 														<input
 															type="checkbox"
@@ -1147,11 +1383,10 @@ export default function OrganRegistry() {
 													{hospitals.map((hospital) => (
 														<label
 															key={hospital.id}
-															className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${
-																deceasedForm.selected_hospitals.includes(hospital.id)
-																	? "border-[#E91E63] bg-[#E91E63]/10"
-																	: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
-															}`}
+															className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition ${deceasedForm.selected_hospitals.includes(hospital.id)
+																? "border-[#E91E63] bg-[#E91E63]/10"
+																: "border-[#F6D6E3]/20 hover:border-[#E91E63]"
+																}`}
 														>
 															<input
 																type="checkbox"
@@ -1356,11 +1591,10 @@ export default function OrganRegistry() {
 																)}
 															</div>
 														</div>
-														<span className={`ml-4 rounded-full px-3 py-1 text-xs font-semibold uppercase ${
-															alert.severity === "CRITICAL" ? "bg-[#DC2626]/20 text-[#F87171]" :
+														<span className={`ml-4 rounded-full px-3 py-1 text-xs font-semibold uppercase ${alert.severity === "CRITICAL" ? "bg-[#DC2626]/20 text-[#F87171]" :
 															alert.severity === "HIGH" ? "bg-[#F59E0B]/20 text-[#FBBF24]" :
-															"bg-[#3B82F6]/20 text-[#93C5FD]"
-														}`}>
+																"bg-[#3B82F6]/20 text-[#93C5FD]"
+															}`}>
 															{alert.severity}
 														</span>
 													</div>

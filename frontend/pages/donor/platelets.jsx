@@ -81,7 +81,7 @@ export default function PlateletsDonation() {
 	}, [loadProfile, loadNeeds])
 
 	const donor = profile || localProfile || null
-	const donorName = formatName(donor?.user)
+	const donorName = donor?.name
 	const totalPlateletDonations = useMemo(
 		() => DONATION_HISTORY_PLACEHOLDER.filter((entry) => entry.type === "Platelets").length,
 		[],

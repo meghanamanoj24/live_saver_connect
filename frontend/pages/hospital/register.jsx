@@ -3,6 +3,7 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useState } from "react"
 import { API_BASE_URL, apiFetch } from "../../lib/api"
+import { validateEmail, validateName, validatePassword, validatePhone, validateZipCode } from "../../lib/validation"
 
 export default function HospitalRegister() {
 	const router = useRouter()
@@ -37,13 +38,38 @@ export default function HospitalRegister() {
 		setError("")
 		setMessage("")
 
-		if (formData.password !== formData.confirmPassword) {
-			setError("Passwords do not match")
+		if (!formData.hospitalName || formData.hospitalName.length < 3) {
+			setError("Please enter a valid hospital name (min 3 characters).")
 			return
 		}
 
-		if (formData.password.length < 8) {
-			setError("Password must be at least 8 characters long")
+		if (!validateName(formData.firstName) || !validateName(formData.lastName)) {
+			setError("Administrator names should contain only letters and be at least 2 characters long.")
+			return
+		}
+
+		if (!validateEmail(formData.email)) {
+			setError("Please enter a valid email address.")
+			return
+		}
+
+		if (!validatePhone(formData.phone)) {
+			setError("Please enter a valid 10-15 digit phone number.")
+			return
+		}
+
+		if (formData.zipCode && !validateZipCode(formData.zipCode)) {
+			setError("Please enter a valid zip code (5-6 digits).")
+			return
+		}
+
+		if (!validatePassword(formData.password)) {
+			setError("Password must be at least 8 characters long.")
+			return
+		}
+
+		if (formData.password !== formData.confirmPassword) {
+			setError("Passwords do not match.")
 			return
 		}
 
@@ -51,7 +77,7 @@ export default function HospitalRegister() {
 		try {
 			// First create user account
 			const finalUsername = formData.username || formData.email.split("@")[0]
-			
+
 			// Try to register user
 			let userResponse
 			try {
@@ -118,10 +144,10 @@ export default function HospitalRegister() {
 						user: userId ? { id: userId, username: finalUsername, email: formData.email } : { username: finalUsername, email: formData.email },
 						user_id: userId,
 					}
-					
+
 					// Store in hospitalData
 					localStorage.setItem("hospitalData", JSON.stringify(storedHospital))
-					
+
 					// Also add to registered hospitals list
 					const existing = JSON.parse(localStorage.getItem("lifesaver:registered_hospitals") || "[]")
 					if (!existing.find(h => h.id === storedHospital.id)) {
@@ -150,16 +176,16 @@ export default function HospitalRegister() {
 						longitude: formData.longitude ? parseFloat(formData.longitude) : null,
 						user: { username: finalUsername, email: formData.email },
 					}
-					
+
 					localStorage.setItem("hospitalData", JSON.stringify(storedHospital))
-					
+
 					// Also add to registered hospitals list
 					const existing = JSON.parse(localStorage.getItem("lifesaver:registered_hospitals") || "[]")
 					if (!existing.find(h => h.id === storedHospital.id)) {
 						existing.push(storedHospital)
 						localStorage.setItem("lifesaver:registered_hospitals", JSON.stringify(existing))
 					}
-					
+
 					localStorage.setItem("accessToken", "simulated_token_" + Date.now())
 				}
 				setMessage("Hospital registration successful! Redirecting...")

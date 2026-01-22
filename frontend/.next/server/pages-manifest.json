@@ -2,7 +2,8 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/donor/blood": "pages/donor/blood.js",
-  "/guide/app-guide": "pages/guide/app-guide.js",
-  "/needs": "pages/needs.js"
+  "/": "pages/index.js",
+  "/auth/register": "pages/auth/register.js",
+  "/donor/dashboard": "pages/donor/dashboard.js",
+  "/needs/post": "pages/needs/post.js"
 }

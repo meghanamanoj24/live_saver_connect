@@ -3,6 +3,7 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useState, useEffect } from "react"
 import { apiFetch } from "../../lib/api"
+import { validatePositiveInteger, validateDateInFuture } from "../../lib/validation"
 
 export default function HospitalNeeds() {
 	const router = useRouter()
@@ -86,7 +87,7 @@ export default function HospitalNeeds() {
 			const data = await apiFetch(`/equipment-needs/?hospital=${hospitalId}`)
 			setEquipmentNeeds(data)
 			// Load orders for each equipment need
-			const ordersPromises = data.map(need => 
+			const ordersPromises = data.map(need =>
 				apiFetch(`/equipment-orders/?equipment_need=${need.id}`).catch(() => [])
 			)
 			const ordersArrays = await Promise.all(ordersPromises)
@@ -139,13 +140,24 @@ export default function HospitalNeeds() {
 
 	async function handleSubmitNeed(e) {
 		e.preventDefault()
+
+		if (!validatePositiveInteger(needForm.quantity_needed)) {
+			alert("Quantity must be a positive integer.")
+			return
+		}
+
+		if (needForm.needed_by && !validateDateInFuture(needForm.needed_by)) {
+			alert("Needed by date must be in the future.")
+			return
+		}
+
 		try {
 			// Format needed_by datetime if provided
 			let neededBy = null
 			if (needForm.needed_by) {
 				neededBy = new Date(needForm.needed_by).toISOString()
 			}
-			
+
 			await apiFetch("/hospital-needs/", {
 				method: "POST",
 				body: JSON.stringify({
@@ -177,6 +189,17 @@ export default function HospitalNeeds() {
 
 	async function handleSubmitEquipment(e) {
 		e.preventDefault()
+
+		if (!validatePositiveInteger(equipmentForm.quantity_needed)) {
+			alert("Quantity must be a positive integer.")
+			return
+		}
+
+		if (equipmentForm.needed_by && !validateDateInFuture(equipmentForm.needed_by)) {
+			alert("Needed by date must be in the future.")
+			return
+		}
+
 		try {
 			const response = await apiFetch("/equipment-needs/", {
 				method: "POST",
@@ -469,7 +492,7 @@ export default function HospitalNeeds() {
 											CANCELLED: "bg-gray-600/20 text-gray-400",
 										}
 										const statusColor = statusColors[need.status] || "bg-gray-600/20 text-gray-400"
-										
+
 										return (
 											<div key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
 												<div className="flex items-start justify-between mb-4">
@@ -501,76 +524,76 @@ export default function HospitalNeeds() {
 														Create Order
 													</button>
 												</div>
-											
-											{needOrders.length > 0 && (
-												<div className="mt-4 space-y-3 border-t border-[#F6D6E3]/20 pt-4">
-													<h4 className="text-sm font-semibold text-white">Orders & Status:</h4>
-													{needOrders.map((order) => {
-														const statusColors = {
-															PENDING: "bg-yellow-600/20 text-yellow-400",
-															APPROVED: "bg-blue-600/20 text-blue-400",
-															INVOICED: "bg-purple-600/20 text-purple-400",
-															SENT: "bg-orange-600/20 text-orange-400",
-															RECEIVED: "bg-green-600/20 text-green-400",
-															REJECTED: "bg-red-600/20 text-red-400",
-														}
-														const statusColor = statusColors[order.status] || "bg-gray-600/20 text-gray-400"
-														
-														return (
-															<div key={order.id} className="rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] p-4">
-																<div className="flex items-start justify-between">
-																	<div className="flex-1">
-																		<div className="flex items-center gap-2 mb-2">
-																			<span className="text-sm font-medium text-white">
-																				Supplier: {order.supplier?.company_name || "Unknown"}
-																			</span>
-																			<span className={`rounded-full px-2 py-1 text-xs font-medium ${statusColor}`}>
-																				{order.status}
-																			</span>
-																		</div>
-																		<p className="text-xs text-pink-100/70">
-																			Quantity: {order.quantity} • Price: {order.currency} {order.unit_price} • Total: {order.currency} {order.total_amount}
-																		</p>
-																		{order.sent_date && (
-																			<p className="text-xs text-orange-400 mt-1">
-																				Sent: {new Date(order.sent_date).toLocaleString()}
-																			</p>
-																		)}
-																		{order.received_date && (
-																			<p className="text-xs text-green-400 mt-1">
-																				Received: {new Date(order.received_date).toLocaleString()}
-																			</p>
-																		)}
-																		{order.invoice && (
-																			<div className="mt-2 p-2 bg-[#131326] rounded border border-[#F6D6E3]/10">
-																				<p className="text-xs font-semibold text-white mb-1">Invoice Details:</p>
-																				<p className="text-xs text-pink-100/70">
-																					Invoice #: {order.invoice.invoice_number}
-																				</p>
-																				<p className="text-xs text-pink-100/70">
-																					Date: {new Date(order.invoice.invoice_date).toLocaleDateString()} ({order.invoice.month_name})
-																				</p>
-																				<p className="text-xs text-pink-100/70">
-																					Amount: {order.invoice.currency} {order.invoice.total_amount}
-																				</p>
-																				<p className="text-xs text-pink-100/70">
-																					Status: {order.invoice.is_paid ? "Paid" : "Pending"}
-																				</p>
-																				<button
-																					onClick={() => window.open(`/invoices/${order.invoice.id}`, '_blank')}
-																					className="mt-2 text-xs text-[#E91E63] hover:underline"
-																				>
-																					View Invoice/Receipt
-																				</button>
+
+												{needOrders.length > 0 && (
+													<div className="mt-4 space-y-3 border-t border-[#F6D6E3]/20 pt-4">
+														<h4 className="text-sm font-semibold text-white">Orders & Status:</h4>
+														{needOrders.map((order) => {
+															const statusColors = {
+																PENDING: "bg-yellow-600/20 text-yellow-400",
+																APPROVED: "bg-blue-600/20 text-blue-400",
+																INVOICED: "bg-purple-600/20 text-purple-400",
+																SENT: "bg-orange-600/20 text-orange-400",
+																RECEIVED: "bg-green-600/20 text-green-400",
+																REJECTED: "bg-red-600/20 text-red-400",
+															}
+															const statusColor = statusColors[order.status] || "bg-gray-600/20 text-gray-400"
+
+															return (
+																<div key={order.id} className="rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] p-4">
+																	<div className="flex items-start justify-between">
+																		<div className="flex-1">
+																			<div className="flex items-center gap-2 mb-2">
+																				<span className="text-sm font-medium text-white">
+																					Supplier: {order.supplier?.company_name || "Unknown"}
+																				</span>
+																				<span className={`rounded-full px-2 py-1 text-xs font-medium ${statusColor}`}>
+																					{order.status}
+																				</span>
 																			</div>
-																		)}
+																			<p className="text-xs text-pink-100/70">
+																				Quantity: {order.quantity} • Price: {order.currency} {order.unit_price} • Total: {order.currency} {order.total_amount}
+																			</p>
+																			{order.sent_date && (
+																				<p className="text-xs text-orange-400 mt-1">
+																					Sent: {new Date(order.sent_date).toLocaleString()}
+																				</p>
+																			)}
+																			{order.received_date && (
+																				<p className="text-xs text-green-400 mt-1">
+																					Received: {new Date(order.received_date).toLocaleString()}
+																				</p>
+																			)}
+																			{order.invoice && (
+																				<div className="mt-2 p-2 bg-[#131326] rounded border border-[#F6D6E3]/10">
+																					<p className="text-xs font-semibold text-white mb-1">Invoice Details:</p>
+																					<p className="text-xs text-pink-100/70">
+																						Invoice #: {order.invoice.invoice_number}
+																					</p>
+																					<p className="text-xs text-pink-100/70">
+																						Date: {new Date(order.invoice.invoice_date).toLocaleDateString()} ({order.invoice.month_name})
+																					</p>
+																					<p className="text-xs text-pink-100/70">
+																						Amount: {order.invoice.currency} {order.invoice.total_amount}
+																					</p>
+																					<p className="text-xs text-pink-100/70">
+																						Status: {order.invoice.is_paid ? "Paid" : "Pending"}
+																					</p>
+																					<button
+																						onClick={() => window.open(`/invoices/${order.invoice.id}`, '_blank')}
+																						className="mt-2 text-xs text-[#E91E63] hover:underline"
+																					>
+																						View Invoice/Receipt
+																					</button>
+																				</div>
+																			)}
+																		</div>
 																	</div>
 																</div>
-															</div>
-														)
-													})}
-												</div>
-											)}
+															)
+														})}
+													</div>
+												)}
 											</div>
 										)
 									})
@@ -592,9 +615,8 @@ export default function HospitalNeeds() {
 															{need.required_blood_group}
 														</span>
 													)}
-													<span className={`rounded px-2 py-1 text-xs font-semibold ${
-														need.status === "URGENT" ? "bg-red-500/10 text-red-300" : "bg-yellow-500/10 text-yellow-300"
-													}`}>
+													<span className={`rounded px-2 py-1 text-xs font-semibold ${need.status === "URGENT" ? "bg-red-500/10 text-red-300" : "bg-yellow-500/10 text-yellow-300"
+														}`}>
 														{need.status}
 													</span>
 												</div>

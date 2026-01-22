@@ -78,7 +78,7 @@ export default function DonorDashboard() {
 	const [emergencyNeeds, setEmergencyNeeds] = useState([])
 	const [accidentAlerts, setAccidentAlerts] = useState([])
 	const [loadingEmergencies, setLoadingEmergencies] = useState(true)
-	
+
 	// Organ Registry State
 	const [organTab, setOrganTab] = useState("pledge")
 	const [organPledgeStatus, setOrganPledgeStatus] = useState(null)
@@ -236,7 +236,7 @@ export default function DonorDashboard() {
 						longitude: position.coords.longitude,
 					})
 				},
-				() => {}
+				() => { }
 			)
 		}
 	}, [])
@@ -256,7 +256,7 @@ export default function DonorDashboard() {
 				return true
 			})
 			setDonationRequests(filtered)
-			
+
 			// Also sync to localStorage
 			if (typeof window !== "undefined") {
 				localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(filtered))
@@ -286,7 +286,7 @@ export default function DonorDashboard() {
 			}
 		}
 	}
-	
+
 	async function loadEmergencies() {
 		setLoadingEmergencies(true)
 		try {
@@ -305,7 +305,7 @@ export default function DonorDashboard() {
 			setLoadingEmergencies(false)
 		}
 	}
-	
+
 	// Refresh requests when page becomes visible (when user comes back from hospital page)
 	useEffect(() => {
 		const handleVisibilityChange = () => {
@@ -318,7 +318,7 @@ export default function DonorDashboard() {
 			document.removeEventListener("visibilitychange", handleVisibilityChange)
 		}
 	}, [])
-	
+
 	// Also refresh on focus
 	useEffect(() => {
 		const handleFocus = () => {
@@ -347,12 +347,12 @@ export default function DonorDashboard() {
 		: "Switch availability back on to receive urgent notifications."
 	const lastDonationDisplay = donor?.last_donated_on
 		? (() => {
-				const parsed = new Date(donor.last_donated_on)
-				if (Number.isNaN(parsed.getTime())) {
-					return donor.last_donated_on
-				}
-				return parsed.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
-		  })()
+			const parsed = new Date(donor.last_donated_on)
+			if (Number.isNaN(parsed.getTime())) {
+				return donor.last_donated_on
+			}
+			return parsed.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+		})()
 		: "Not recorded"
 
 	const totalBloodDonations = useMemo(
@@ -551,7 +551,7 @@ export default function DonorDashboard() {
 	async function handleOrganPledgeSubmit(event) {
 		event.preventDefault()
 		setOrganFeedback(null)
-		
+
 		if (!organForm.post_mortem_consent || !organForm.acknowledgement) {
 			setOrganFeedback({
 				type: "error",
@@ -723,9 +723,9 @@ export default function DonorDashboard() {
 									View Emergency Requests
 								</a>
 							</Link>
-							<Link href="/donor/donate" legacyBehavior>
-								<a className="rounded-lg bg-[#E91E63] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition">
-									Donate Now
+							<Link href="/donor/book-appointment" legacyBehavior>
+								<a className="rounded-lg border border-[#F6D6E3] px-4 py-2 text-sm font-medium text-pink-100 hover:bg-white/5 transition">
+									Book Appointment
 								</a>
 							</Link>
 							<Link href="/register/donor" legacyBehavior>

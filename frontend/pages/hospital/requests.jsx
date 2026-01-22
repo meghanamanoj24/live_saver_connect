@@ -171,15 +171,16 @@ export default function HospitalRequests() {
 													{request.status || "PENDING"}
 												</span>
 											</div>
-											<p className="mt-1 text-sm text-pink-100/70">Email: {donor.email || "Not provided"}</p>
-											{request.message && <p className="mt-2 text-sm text-pink-100/80">{request.message}</p>}
+											<p className="mt-1 text-sm text-pink-100/70">Email: {donor.email || "Not provided"} | Phone: {donor.phone || "N/A"}</p>
+											<p className="mt-1 text-xs text-pink-100/50">Location: {donor.city || "N/A"}, {donor.zip_code || ""}</p>
+											{request.message && <div className="mt-3 p-3 rounded bg-white/5 border border-white/10 text-sm text-pink-100/80 italic">"{request.message}"</div>}
 											{request.scheduled_date && (
 												<p className="mt-2 text-sm text-pink-100/70">
 													Scheduled: {new Date(request.scheduled_date).toLocaleString()}
 												</p>
 											)}
 											<p className="mt-2 text-xs text-pink-100/60">
-													Requested: {new Date(request.created_at || Date.now()).toLocaleString()}
+												Requested: {new Date(request.created_at || Date.now()).toLocaleString()}
 											</p>
 										</div>
 										{request.status === "PENDING" && (

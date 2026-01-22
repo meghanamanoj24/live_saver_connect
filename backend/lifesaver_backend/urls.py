@@ -36,6 +36,7 @@ from core.views import (
 	CustomTokenObtainPairView,
 	MetricsOverviewView,
 )
+from core.views_user import ManageUserView
 
 router = DefaultRouter()
 router.register(r"donors", DonorProfileViewSet)
@@ -73,6 +74,7 @@ urlpatterns = [
 	path("api/auth/register/", RegisterUserView.as_view(), name="register"),
 	path("api/auth/token/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),  # <-- Use custom login view
 	path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+	path("api/auth/users/me/", ManageUserView.as_view(), name="user_me"),
 ]
 
 # Serve media files in development

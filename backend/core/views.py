@@ -171,9 +171,7 @@ class RegisterUserView(APIView):
                 elif role == UserRoles.MEDICAL_ESSENTIAL:
                     MedicalEssential.objects.create(
                         company_name=f"{user.first_name} {user.last_name}",
-                        contact_person=user.first_name,
-                        phone=data["phone"],
-                        email=user.email,
+                        user=user,
                         address="",
                         city=""
                     )
@@ -384,15 +382,27 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 
 
 class OrganDonorViewSet(viewsets.ModelViewSet):
-	queryset = OrganDonor.objects.select_related("user").prefetch_related("selected_hospitals").all()
+	queryset = OrganDonor.objects.select_related("created_by").prefetch_related("selected_hospitals").all()
 	serializer_class = OrganDonorSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+	def get_queryset(self):
+		user = self.request.user
+		if not user.is_authenticated:
+			return OrganDonor.objects.none()
+			
+		# If user is a hospital, show donors who selected this hospital
+		if hasattr(user, 'hospital_profile'):
+			return OrganDonor.objects.filter(selected_hospitals=user.hospital_profile)
+			
+		# If user is a normal user/donor, show their own profile
+		return OrganDonor.objects.filter(created_by=user)
 
 	@action(detail=False, methods=["get", "put", "patch"], permission_classes=[permissions.IsAuthenticated])
 	def me(self, request):
 		"""Get or update organ donor profile for logged-in user"""
 		try:
-			organ_donor = OrganDonor.objects.select_related("user").prefetch_related("selected_hospitals").get(user=request.user)
+			organ_donor = OrganDonor.objects.select_related("created_by").prefetch_related("selected_hospitals").get(created_by=request.user)
 		except OrganDonor.DoesNotExist:
 			if request.method.lower() == "get":
 				return Response({"detail": "Organ donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -414,6 +424,42 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		instance = serializer.save()
 		response_status = status.HTTP_200_OK if organ_donor else status.HTTP_201_CREATED
 		return Response(self.get_serializer(instance).data, status=response_status)
+
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def notify_contact(self, request):
+		"""Simulate sending notification to emergency contact"""
+		try:
+			organ_donor = OrganDonor.objects.get(created_by=request.user)
+			if not organ_donor.emergency_contact_phone:
+				return Response({"detail": "No emergency contact phone recorded."}, status=status.HTTP_400_BAD_REQUEST)
+			
+			# In a real app, integrate with SMS/Email service here
+			return Response({
+				"message": f"Pledge report successfully sent to {organ_donor.emergency_contact_name} ({organ_donor.emergency_contact_phone}).",
+				"target": organ_donor.emergency_contact_phone
+			})
+		except OrganDonor.DoesNotExist:
+			return Response({"detail": "Organ donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def notify_hospitals(self, request):
+		"""Simulate secure transmission of pledge report to selected hospitals"""
+		try:
+			organ_donor = OrganDonor.objects.prefetch_related("selected_hospitals").get(created_by=request.user)
+			hospitals = organ_donor.selected_hospitals.all()
+			
+			if not hospitals:
+				return Response({"detail": "No hospitals selected for notification."}, status=status.HTTP_400_BAD_REQUEST)
+			
+			hospital_names = [h.name for h in hospitals]
+			
+			# In a real app, this would trigger a system notification or secure portal update for the hospitals
+			return Response({
+				"message": f"Pledge report securely transmitted to {len(hospitals)} hospital(s): {', '.join(hospital_names)}.",
+				"notified_count": len(hospitals)
+			})
+		except OrganDonor.DoesNotExist:
+			return Response({"detail": "Organ donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class MarketplaceItemViewSet(viewsets.ModelViewSet):
@@ -590,6 +636,26 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 			queryset = queryset.filter(status=status_filter)
 		return queryset
 
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def accept(self, request, pk=None):
+		appointment = self.get_object()
+		if appointment.status != "PENDING":
+			return Response({"detail": "Only pending appointments can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
+		appointment.status = "APPROVED"
+		appointment.notes = request.data.get("notes", appointment.notes)
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject(self, request, pk=None):
+		appointment = self.get_object()
+		if appointment.status != "PENDING":
+			return Response({"detail": "Only pending appointments can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
+		appointment.status = "CANCELLED"
+		appointment.notes = request.data.get("notes", appointment.notes)
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
 
 class DeceasedDonorRequestViewSet(viewsets.ModelViewSet):
 	queryset = DeceasedDonorRequest.objects.select_related("processed_by", "hospital_referred").prefetch_related("selected_hospitals").all().order_by("-created_at")
@@ -610,7 +676,7 @@ class DeceasedDonorRequestViewSet(viewsets.ModelViewSet):
 
 
 class AccidentAlertViewSet(viewsets.ModelViewSet):
-	queryset = AccidentAlert.objects.select_related("reported_by", "hospital_referred").all().order_by("-created_at")
+	queryset = AccidentAlert.objects.select_related("hospital_referred").all().order_by("-created_at")
 	serializer_class = AccidentAlertSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
