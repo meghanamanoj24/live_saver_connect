@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import (
 	DonorProfile,
+	DonorCoupon,
 	EmergencyNeed,
 	OrganDonor,
 	MarketplaceItem,
@@ -31,6 +32,7 @@ from .models import (
 	EquipmentNeed,
 	EquipmentOrder,
 	Invoice,
+	EventRegistration,
 )
 
 User = get_user_model()
@@ -95,6 +97,8 @@ class DonorProfileSerializer(serializers.ModelSerializer):
             "is_platelet_donor",
             "last_donated_on",
             "is_available",
+            "current_stars",
+            "total_money_earned",
         ]
 
     def get_name(self, obj):
@@ -109,6 +113,13 @@ class DonorProfileSerializer(serializers.ModelSerializer):
             setattr(user, attr, value)
         user.save()
         return super().update(instance, validated_data)
+
+
+class DonorCouponSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DonorCoupon
+        fields = ["id", "donor", "code", "discount_percentage", "is_used", "created_at"]
+        read_only_fields = ["created_at"]
 
 
 class EmergencyNeedSerializer(serializers.ModelSerializer):
@@ -150,6 +161,7 @@ class HospitalSerializer(serializers.ModelSerializer):
 			"zip_code",
 			"address",
 			"phone",
+			"email",
 			"website",
 			"latitude",
 			"longitude",
@@ -171,6 +183,7 @@ class OrganDonorSerializer(serializers.ModelSerializer):
 		many=True, 
 		required=False
 	)
+	accepted_by_hospital_name = serializers.ReadOnlyField(source="accepted_by_hospital.name")
 
 	class Meta:
 		model = OrganDonor
@@ -196,10 +209,17 @@ class OrganDonorSerializer(serializers.ModelSerializer):
 			"emergency_contact_name",
 			"emergency_contact_phone",
 			"emergency_contact_relation",
+			"status",
+			"hospital_message",
+			"accepted_by_hospital",
+			"accepted_by_hospital_name",
+			"body_received_at",
+			"payment_amount",
+			"payment_date",
 			"created_at",
 			"updated_at",
 		]
-		read_only_fields = ["created_at", "updated_at"]
+		read_only_fields = ["created_at", "updated_at", "payment_date", "body_received_at"]
 
 
 
@@ -313,10 +333,15 @@ class DonationRequestSerializer(serializers.ModelSerializer):
 			"donor_id",
 			"hospital",
 			"hospital_id",
+			"request_type",
 			"status",
 			"message",
 			"scheduled_date",
+			"patient_name",
 			"notes",
+			"confirmed_arrival_at",
+			"health_status",
+			"health_report",
 			"created_at",
 			"updated_at",
 		]
@@ -350,7 +375,7 @@ class HospitalNeedSerializer(serializers.ModelSerializer):
 
 class AppointmentSerializer(serializers.ModelSerializer):
 	donor = UserPublicSerializer(read_only=True)
-	donor_id = serializers.PrimaryKeyRelatedField(source="donor", write_only=True, queryset=User.objects.all(), required=True)
+	donor_id = serializers.PrimaryKeyRelatedField(source="donor", write_only=True, queryset=User.objects.all(), required=False)
 	hospital = HospitalSerializer(read_only=True)
 	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
 	doctor = DoctorSerializer(read_only=True)
@@ -522,6 +547,30 @@ class BloodDonationEventSerializer(serializers.ModelSerializer):
 			"updated_at",
 		]
 		read_only_fields = ["created_at", "updated_at", "registered_count"]
+
+
+class EventRegistrationSerializer(serializers.ModelSerializer):
+	donor = UserPublicSerializer(read_only=True)
+	donor_id = serializers.PrimaryKeyRelatedField(source="donor", write_only=True, queryset=User.objects.all(), required=False)
+	event = BloodDonationEventSerializer(read_only=True)
+	event_id = serializers.PrimaryKeyRelatedField(source="event", write_only=True, queryset=BloodDonationEvent.objects.all(), required=True)
+
+	class Meta:
+		model = EventRegistration
+		fields = [
+			"id",
+			"event",
+			"event_id",
+			"donor",
+			"donor_id",
+			"status",
+			"invoice_number",
+			"verification_document",
+			"registered_at",
+			"arrived_at",
+		]
+		read_only_fields = ["invoice_number", "registered_at", "arrived_at"]
+
 
 
 class MedicalEssentialSerializer(serializers.ModelSerializer):
@@ -718,6 +767,9 @@ class PatientVisitSerializer(serializers.ModelSerializer):
 			"payment_details",
 			"notes",
 			"performance_notes",
+			"rewards",
+			"fruity_given",
+			"star_reward",
 			"created_at",
 			"updated_at",
 		]

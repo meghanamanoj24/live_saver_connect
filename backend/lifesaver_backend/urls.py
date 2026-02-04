@@ -19,6 +19,7 @@ from core.views import (
 	DeceasedDonorRequestViewSet,
 	AccidentAlertViewSet,
 	BloodDonationEventViewSet,
+	EventRegistrationViewSet,
 	MedicalEssentialViewSet,
 	MedicalStoreProductViewSet,
 	MedicalEquipmentViewSet,
@@ -35,6 +36,7 @@ from core.views import (
 	RegisterUserView,
 	CustomTokenObtainPairView,
 	MetricsOverviewView,
+	DonorCouponViewSet,
 )
 from core.views_user import ManageUserView
 
@@ -53,6 +55,8 @@ router.register(r"appointments", AppointmentViewSet)
 router.register(r"deceased-donor-requests", DeceasedDonorRequestViewSet)
 router.register(r"accident-alerts", AccidentAlertViewSet)
 router.register(r"blood-donation-events", BloodDonationEventViewSet)
+router.register(r"event-registrations", EventRegistrationViewSet)
+
 router.register(r"medical-essential", MedicalEssentialViewSet)
 router.register(r"medical-store-products", MedicalStoreProductViewSet)
 router.register(r"medical-equipment", MedicalEquipmentViewSet)
@@ -66,6 +70,7 @@ router.register(r"performance-tracking", PerformanceTrackingViewSet)
 router.register(r"equipment-needs", EquipmentNeedViewSet)
 router.register(r"equipment-orders", EquipmentOrderViewSet)
 router.register(r"invoices", InvoiceViewSet)
+router.register(r"donor-coupons", DonorCouponViewSet, basename="donor-coupons")
 
 urlpatterns = [
 	path("admin/", admin.site.urls),

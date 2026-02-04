@@ -7,11 +7,12 @@ from rest_framework.views import APIView
 from django.db import transaction
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 
-from .models import User, UserRoles, DonorProfile, EmergencyNeed, OrganDonor, MarketplaceItem, Hospital, Doctor, DoctorAvailability, Review, DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, AccidentAlert, BloodDonationEvent, MedicalEssential, MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, PatientVisit, Staff, StaffAvailability, Attendance, SalaryPayment, PerformanceTracking, EquipmentNeed, EquipmentOrder, Invoice
+from .models import User, UserRoles, DonorProfile, DonorCoupon, EmergencyNeed, OrganDonor, MarketplaceItem, Hospital, Doctor, DoctorAvailability, Review, DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, AccidentAlert, BloodDonationEvent, EventRegistration, MedicalEssential, MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, PatientVisit, Staff, StaffAvailability, Attendance, SalaryPayment, PerformanceTracking, EquipmentNeed, EquipmentOrder, Invoice
 from .serializers import (
 	DonorProfileSerializer,
+	DonorCouponSerializer,
 	EmergencyNeedSerializer,
 	OrganDonorSerializer,
 	MarketplaceItemSerializer,
@@ -40,6 +41,7 @@ from .serializers import (
 	EquipmentNeedSerializer,
 	EquipmentOrderSerializer,
 	InvoiceSerializer,
+	EventRegistrationSerializer,
 )
 
 
@@ -105,8 +107,7 @@ class RegisterUserView(APIView):
 
         required_fields = [
             "first_name", "last_name", "email",
-            "password", "confirm_password",
-            "phone", "donor_module"
+            "password", "confirm_password"
         ]
         print("data", data)
         for field in required_fields:
@@ -128,7 +129,8 @@ class RegisterUserView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        role = data["donor_module"]
+        role = data.get("donor_module", "donor")
+        phone = data.get("phone", "")
 
         if role not in UserRoles.values:
             return Response(
@@ -211,9 +213,26 @@ class DonorProfileViewSet(viewsets.ModelViewSet):
 	def _get_or_none(self, user):
 		print('user',user)
 		try:
-			return DonorProfile.objects.get(user=user)
+			profile = DonorProfile.objects.get(user=user)
+			self._sync_stars(profile)
+			return profile
 		except DonorProfile.DoesNotExist:
 			return None
+
+	def _sync_stars(self, profile):
+		if not profile:
+			return
+		from .models import PatientVisit
+		donation_count = PatientVisit.objects.filter(
+			patient=profile.user,
+			visit_purpose="BLOOD_DONATION"
+		).count()
+		
+		# If stars are missing or behind, update them
+		# We don't want to reset if somehow stars are ahead (though unlikely in this flow)
+		if profile.current_stars < donation_count:
+			profile.current_stars = donation_count
+			profile.save()
 
 	@action(detail=False, methods=["get", "put", "patch"], permission_classes=[permissions.IsAuthenticated])
 	def me(self, request):
@@ -241,13 +260,15 @@ class DonorProfileViewSet(viewsets.ModelViewSet):
 	@action(detail=False, methods=["get"], url_path="dashboard", permission_classes=[permissions.IsAuthenticated])
 	def dashboard(self, request):
 		profile = self._get_or_none(request.user)
-		print("prifile-------------------------", profile.user.role)
 		if not profile:
 			return Response({"detail": "Donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
 		compatible_groups, is_universal = self._get_compatible_groups(profile.user.blood_group)
 
 		needs_queryset = EmergencyNeed.objects.select_related("created_by").filter(status="OPEN")
+		if profile.city:
+			needs_queryset = needs_queryset.filter(city__icontains=profile.city)
+
 		if not is_universal and compatible_groups:
 			needs_queryset = needs_queryset.filter(
 				Q(required_blood_group__in=compatible_groups)
@@ -291,6 +312,15 @@ class DonorProfileViewSet(viewsets.ModelViewSet):
 				"upcoming_events": events_data,
 			}
 		)
+
+
+class DonorCouponViewSet(viewsets.ReadOnlyModelViewSet):
+	queryset = DonorCoupon.objects.all()
+	serializer_class = DonorCouponSerializer
+	permission_classes = [permissions.IsAuthenticated]
+
+	def get_queryset(self):
+		return self.queryset.filter(donor=self.request.user)
 
 
 class EmergencyNeedViewSet(viewsets.ModelViewSet):
@@ -391,9 +421,12 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		if not user.is_authenticated:
 			return OrganDonor.objects.none()
 			
-		# If user is a hospital, show donors who selected this hospital
+		# If user is a hospital, show donors who selected this hospital OR those who have already been accepted by this hospital
 		if hasattr(user, 'hospital_profile'):
-			return OrganDonor.objects.filter(selected_hospitals=user.hospital_profile)
+			from django.db.models import Q
+			return OrganDonor.objects.filter(
+				Q(selected_hospitals=user.hospital_profile) | Q(accepted_by_hospital=user.hospital_profile)
+			).distinct()
 			
 		# If user is a normal user/donor, show their own profile
 		return OrganDonor.objects.filter(created_by=user)
@@ -461,6 +494,76 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		except OrganDonor.DoesNotExist:
 			return Response({"detail": "Organ donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def accept_pledge(self, request, pk=None):
+		"""Hospital accepts the organ pledge and sends a commitment message"""
+		organ_donor = self.get_object()
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital:
+			return Response({"detail": "Only hospitals can accept pledges."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# Default message if none provided
+		message = request.data.get("message", "Your emergency contact will come and give the report after your death then only this will be accepted")
+		
+		organ_donor.status = "ACCEPTED"
+		organ_donor.hospital_message = message
+		organ_donor.accepted_by_hospital = hospital
+		organ_donor.save()
+		
+		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def commit_pledge(self, request, pk=None):
+		"""Donor acknowledges the hospital condition and finalizing the pledge"""
+		organ_donor = self.get_object()
+		if organ_donor.created_by != request.user:
+			return Response({"detail": "You can only commit to your own pledge."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if organ_donor.status != "ACCEPTED":
+			return Response({"detail": "Pledge must be accepted by a hospital first."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		organ_donor.status = "COMMITTED"
+		organ_donor.save()
+		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def receive_body(self, request, pk=None):
+		"""Hospital confirms the arrival of the donor's body and records payment"""
+		organ_donor = self.get_object()
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital or organ_donor.accepted_by_hospital != hospital:
+			return Response({"detail": "Only the accepting hospital can record body reception."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# Update details
+		organ_donor.status = "COMPLETED"
+		organ_donor.body_received_at = timezone.now()
+		
+		payment_amount = request.data.get("payment_amount")
+		if payment_amount:
+			organ_donor.payment_amount = payment_amount
+			organ_donor.payment_date = timezone.now()
+
+		organ_donor.save()
+		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def hospital_delete(self, request, pk=None):
+		"""Hospital removes the record from their view (for cancelled or processed pledges)"""
+		organ_donor = self.get_object()
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital:
+			return Response({"detail": "Only hospitals can perform this action."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# If it was cancelled by donor, hospital can just remove themselves from selected_hospitals
+		if organ_donor.status == "CANCELLED" or organ_donor.status == "BODY_RECEIVED":
+			if organ_donor.accepted_by_hospital == hospital:
+				organ_donor.accepted_by_hospital = None
+			organ_donor.selected_hospitals.remove(hospital)
+			organ_donor.save()
+			return Response({"detail": "Record removed from dashboard."}, status=status.HTTP_200_OK)
+		
+		return Response({"detail": "Can only delete processed or cancelled pledges."}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class MarketplaceItemViewSet(viewsets.ModelViewSet):
 	queryset = MarketplaceItem.objects.select_related("seller").all().order_by("-created_at")
@@ -507,12 +610,22 @@ class HospitalViewSet(viewsets.ModelViewSet):
 	@action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
 	def me(self, request):
 		"""Get hospital profile for logged-in hospital user"""
-		try:
-			hospital = Hospital.objects.get(user=request.user)
+		user = request.user
+		hospital = getattr(user, "hospital_profile", None)
+		
+		# Fallback: if no direct profile link, but user is a hospital role,
+		# try to find a hospital where this user's email might be listed or if it's the only one
+		if not hospital and user.role == "hospital":
+			# Try to find by direct email match in hospital records
+			hospital = Hospital.objects.filter(email=user.email).first()
+			if not hospital:
+				# Heuristic: find by phone if available
+				hospital = Hospital.objects.filter(phone=user.phone).first() if user.phone else None
+		
+		if hospital:
 			serializer = self.get_serializer(hospital)
 			return Response(serializer.data)
-		except Hospital.DoesNotExist:
-			return Response({"detail": "Hospital profile not found."}, status=status.HTTP_404_NOT_FOUND)
+		return Response({"detail": "Hospital profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -550,13 +663,21 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		queryset = super().get_queryset()
 		# Filter by donor if requested
 		if self.request.query_params.get("donor") == "me":
+			# print("hhhhhhhh", self.request.query_params, self.request.user)
 			if not self.request.user.is_authenticated:
+				# print("yyyy")
+
 				return DonationRequest.objects.none()
 			queryset = queryset.filter(donor=self.request.user)
 		# Filter by hospital if requested
 		hospital_id = self.request.query_params.get("hospital")
 		if hospital_id:
 			queryset = queryset.filter(hospital_id=hospital_id)
+		# Filter by request type if requested
+		request_type = self.request.query_params.get("request_type")
+		if request_type:
+			queryset = queryset.filter(request_type=request_type)
+		# print("queryset",queryset)
 		return queryset
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
@@ -566,6 +687,17 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			return Response({"detail": "Only pending requests can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
 		request_obj.status = "ACCEPTED"
 		request_obj.notes = request.data.get("notes", "")
+		
+		# Set scheduled date if provided
+		scheduled_date = request.data.get("scheduled_date")
+		if scheduled_date:
+			request_obj.scheduled_date = scheduled_date
+			
+		# Set patient name if provided
+		patient_name = request.data.get("patient_name")
+		if patient_name:
+			request_obj.patient_name = patient_name
+			
 		request_obj.save()
 		return Response(self.get_serializer(request_obj).data)
 
@@ -576,6 +708,86 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			return Response({"detail": "Only pending requests can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
 		request_obj.status = "REJECTED"
 		request_obj.notes = request.data.get("notes", "")
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+	
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_arrival(self, request, pk=None):
+		request_obj = self.get_object()
+		if request_obj.status != "ACCEPTED":
+			return Response({"detail": "Only accepted requests can be confirmed for arrival."}, status=status.HTTP_400_BAD_REQUEST)
+		request_obj.status = "ARRIVED"
+		request_obj.confirmed_arrival_at = timezone.now()
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def hospital_verify(self, request, pk=None):
+		request_obj = self.get_object()
+		if request_obj.status != "ARRIVED":
+			return Response({"detail": "Only donors who have confirmed arrival can be verified."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		with transaction.atomic():
+			request_obj.status = "COMPLETED"
+			request_obj.notes = request.data.get("notes", request_obj.notes)
+			request_obj.save()
+
+			# Create PatientVisit record
+			from .models import PatientVisit
+			visit_date = request.data.get("visit_date") or timezone.now()
+			
+			PatientVisit.objects.create(
+				patient=request_obj.donor,
+				hospital=request_obj.hospital,
+				visit_purpose="BLOOD_DONATION",
+				visit_date=visit_date,
+				notes=request.data.get("notes", ""),
+				rewards=request.data.get("rewards", ""),
+				fruity_given=request.data.get("fruity_given", False),
+				star_reward=request.data.get("star_reward", True)  # User mentioned a star reward for each donation
+			)
+
+			# Update DonorProfile last_donated_on
+			dt = datetime.fromisoformat(visit_date.replace("Z", ""))
+			formatted_date = dt.strftime("%Y-%m-%d")
+
+			# Update DonorProfile last_donated_on and rewards
+			from .models import DonorProfile, DonorCoupon
+			import secrets
+			
+			profile, _ = DonorProfile.objects.get_or_create(user=request_obj.donor)
+			profile.last_donated_on = formatted_date
+			
+			# Increment stars (cumulative)
+			profile.current_stars += 1
+			
+			# Check for 50 star milestone (recurring Every 50 stars)
+			if profile.current_stars > 0 and profile.current_stars % 50 == 0:
+				# Award Rs 50
+				from decimal import Decimal
+				profile.total_money_earned += Decimal("50.00")
+				
+				# Generate 20% Discount Coupon
+				coupon_code = f"LS-{secrets.token_hex(4).upper()}"
+				DonorCoupon.objects.create(
+					donor=request_obj.donor,
+					code=coupon_code,
+					discount_percentage=20
+				)
+				
+			profile.save()
+
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject_arrival(self, request, pk=None):
+		request_obj = self.get_object()
+		if request_obj.status != "ARRIVED":
+			return Response({"detail": "Only arrived donors can have their arrival rejected."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Set back to ACCEPTED so they can try to 'arrive' again if it was a mistake
+		request_obj.status = "ACCEPTED"
+		request_obj.notes = request.data.get("notes", "Arrival registration rejected by hospital staff.")
 		request_obj.save()
 		return Response(self.get_serializer(request_obj).data)
 
@@ -591,6 +803,10 @@ class HospitalNeedViewSet(viewsets.ModelViewSet):
 		hospital_id = self.request.query_params.get("hospital")
 		if hospital_id:
 			queryset = queryset.filter(hospital_id=hospital_id)
+		# Filter by city
+		city = self.request.query_params.get("city")
+		if city:
+			queryset = queryset.filter(hospital__city__icontains=city)
 		# Filter by need type
 		need_type = self.request.query_params.get("need_type")
 		if need_type:
@@ -617,7 +833,7 @@ class HospitalNeedViewSet(viewsets.ModelViewSet):
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
-	queryset = Appointment.objects.select_related("donor", "hospital", "donation_request").all().order_by("-appointment_date")
+	queryset = Appointment.objects.select_related("hospital", "donation_request").all().order_by("-appointment_date")
 	serializer_class = AppointmentSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
@@ -627,34 +843,186 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 		hospital_id = self.request.query_params.get("hospital")
 		if hospital_id:
 			queryset = queryset.filter(hospital_id=hospital_id)
+		
 		# Filter by donor
 		if self.request.query_params.get("donor") == "me":
-			queryset = queryset.filter(donor=self.request.user)
+			if self.request.user.is_authenticated:
+				# Show appointments where the user is either the direct donor 
+				# OR linked via a donation request
+				queryset = queryset.filter(
+					Q(donor=self.request.user) | 
+					Q(donation_request__donor=self.request.user)
+				).distinct()
+			else:
+				return Appointment.objects.none()
+
 		# Filter by status
 		status_filter = self.request.query_params.get("status")
 		if status_filter:
 			queryset = queryset.filter(status=status_filter)
 		return queryset
 
+	def perform_create(self, serializer):
+		serializer.save(donor=self.request.user)
+
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def accept(self, request, pk=None):
 		appointment = self.get_object()
 		if appointment.status != "PENDING":
-			return Response({"detail": "Only pending appointments can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
-		appointment.status = "APPROVED"
-		appointment.notes = request.data.get("notes", appointment.notes)
-		appointment.save()
-		return Response(self.get_serializer(appointment).data)
+			return Response({"detail": f"This appointment is currently {appointment.status}. Only pending appointments can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		try:
+			with transaction.atomic():
+				appointment.status = "APPROVED"
+				
+				# Update date and time if provided
+				if request.data.get("appointment_date"):
+					appointment.appointment_date = request.data.get("appointment_date")
+				if request.data.get("appointment_time"):
+					appointment.appointment_time = request.data.get("appointment_time")
+					
+				appointment.notes = request.data.get("notes", appointment.notes)
+				appointment.save()
+				return Response(self.get_serializer(appointment).data)
+		except Exception as e:
+			return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def reject(self, request, pk=None):
 		appointment = self.get_object()
 		if appointment.status != "PENDING":
 			return Response({"detail": "Only pending appointments can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
-		appointment.status = "CANCELLED"
-		appointment.notes = request.data.get("notes", appointment.notes)
+		
+		try:
+			appointment.status = "CANCELLED"
+			appointment.rejection_reason = request.data.get("rejection_reason", "Rejected by hospital staff.")
+			appointment.notes = request.data.get("notes", appointment.notes)
+			appointment.save()
+			return Response(self.get_serializer(appointment).data)
+		except Exception as e:
+			return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm(self, request, pk=None):
+		"""Donor confirms the hospital-approved appointment slot"""
+		appointment = self.get_object()
+		if appointment.status != "APPROVED":
+			return Response({"detail": f"Only approved appointments can be confirmed. Current status: {appointment.status}"}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Ensure only the owner (donor) can confirm
+		if appointment.donor != request.user and appointment.donation_request.donor != request.user:
+			return Response({"detail": "You are not authorized to confirm this appointment."}, status=status.HTTP_403_FORBIDDEN)
+
+		appointment.status = "SCHEDULED"
 		appointment.save()
 		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def decline(self, request, pk=None):
+		"""Donor declines the hospital-approved appointment slot"""
+		appointment = self.get_object()
+		if appointment.status != "APPROVED":
+			return Response({"detail": "Only approved appointments can be declined."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Ensure only the owner (donor) can decline
+		if appointment.donor != request.user and appointment.donation_request.donor != request.user:
+			return Response({"detail": "You are not authorized to decline this appointment."}, status=status.HTTP_403_FORBIDDEN)
+
+		appointment.status = "CANCELLED"
+		appointment.notes = request.data.get("notes", "Declined by donor.")
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def hospital_verify(self, request, pk=None):
+		"""Hospital verifies the appointment (Saw Doctor)"""
+		appointment = self.get_object()
+		# Allowed for SCHEDULED or APPROVED status
+		if appointment.status not in ["SCHEDULED", "APPROVED", "ARRIVED"]:
+			return Response({"detail": f"Only scheduled or arrived appointments can be verified. Current status: {appointment.status}"}, status=status.HTTP_400_BAD_REQUEST)
+		
+		donor = appointment.donor or (appointment.donation_request.donor if appointment.donation_request else None)
+		if not donor:
+			return Response({"detail": "No donor found for this appointment."}, status=status.HTTP_400_BAD_REQUEST)
+
+		with transaction.atomic():
+			appointment.status = "COMPLETED"
+			appointment.notes = request.data.get("notes", appointment.notes)
+			appointment.save()
+
+			# Also update linked donation request if exists
+			if appointment.donation_request:
+				appointment.donation_request.status = "COMPLETED"
+				appointment.donation_request.save()
+
+			# Create PatientVisit record
+			from .models import PatientVisit
+			visit_date = request.data.get("visit_date") or timezone.now()
+			
+			PatientVisit.objects.create(
+				patient=donor,
+				hospital=appointment.hospital,
+				doctor=appointment.doctor,
+				visit_purpose="APPOINTMENT",
+				visit_date=visit_date,
+				notes=request.data.get("notes", ""),
+				rewards=request.data.get("rewards", ""),
+				fruity_given=request.data.get("fruity_given", False),
+				star_reward=request.data.get("star_reward", True)
+			)
+
+			# Update DonorProfile
+			try:
+				dt = datetime.fromisoformat(str(visit_date).replace("Z", ""))
+				formatted_date = dt.strftime("%Y-%m-%d")
+			except ValueError:
+				formatted_date = timezone.now().strftime("%Y-%m-%d")
+
+			from .models import DonorProfile, DonorCoupon
+			import secrets
+			
+			profile, _ = DonorProfile.objects.get_or_create(user=donor)
+			profile.last_donated_on = formatted_date
+			profile.current_stars += 1
+			
+			if profile.current_stars > 0 and profile.current_stars % 50 == 0:
+				from decimal import Decimal
+				profile.total_money_earned += Decimal("50.00")
+				coupon_code = f"LS-{secrets.token_hex(4).upper()}"
+				DonorCoupon.objects.create(
+					donor=donor,
+					code=coupon_code,
+					discount_percentage=20
+				)
+			profile.save()
+
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def not_reached(self, request, pk=None):
+		"""Hospital marks donor as not reached/no-show"""
+		appointment = self.get_object()
+		if appointment.status not in ["SCHEDULED", "APPROVED", "PENDING"]:
+			return Response({"detail": "Only active appointments can be marked as not reached."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		appointment.status = "NO_SHOW"
+		appointment.notes = "Ok we understand ur issues and please contact us when you are available"
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def acknowledge(self, request, pk=None):
+		"""Donor acknowledges the missed appointment message"""
+		appointment = self.get_object()
+		if appointment.status != "NO_SHOW":
+			return Response({"detail": "Only missed appointments can be acknowledged."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Ensure only the donor can acknowledge
+		if appointment.donor != request.user and (not appointment.donation_request or appointment.donation_request.donor != request.user):
+			return Response({"detail": "You are not authorized to acknowledge this."}, status=status.HTTP_403_FORBIDDEN)
+
+		appointment.delete()
+		return Response({"detail": "Appointment cleared."}, status=status.HTTP_200_OK)
 
 
 class DeceasedDonorRequestViewSet(viewsets.ModelViewSet):
@@ -818,6 +1186,169 @@ class BloodDonationEventViewSet(viewsets.ModelViewSet):
 			from django.utils import timezone
 			queryset = queryset.filter(event_date__gte=timezone.now(), status="UPCOMING")
 		return queryset
+
+
+class EventRegistrationViewSet(viewsets.ModelViewSet):
+	queryset = EventRegistration.objects.select_related("event", "donor").all().order_by("-registered_at")
+	serializer_class = EventRegistrationSerializer
+	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+	def get_queryset(self):
+		queryset = super().get_queryset()
+		# Filter by event
+		event_id = self.request.query_params.get("event")
+		if event_id:
+			queryset = queryset.filter(event_id=event_id)
+		
+		# Filter by donor
+		if self.request.query_params.get("donor") == "me":
+			if self.request.user.is_authenticated:
+				queryset = queryset.filter(donor=self.request.user)
+			else:
+				return EventRegistration.objects.none()
+		
+		# Filter by hospital (all registrations for events organized by this hospital)
+		hospital_id = self.request.query_params.get("hospital")
+		if hospital_id:
+			queryset = queryset.filter(event__hospital_id=hospital_id)
+
+		return queryset
+
+	def perform_create(self, serializer):
+		serializer.save(donor=self.request.user)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm(self, request, pk=None):
+		registration = self.get_object()
+		
+		# Check authorization
+		is_authorized = False
+		# 1. Direct ownership check
+		if registration.event.hospital.user == request.user:
+			is_authorized = True
+		# 2. Hospital profile check (fallback)
+		if not is_authorized:
+			try:
+				hospital = Hospital.objects.get(user=request.user)
+				if registration.event.hospital == hospital:
+					is_authorized = True
+			except Hospital.DoesNotExist:
+				pass
+		
+		if not is_authorized:
+			return Response({"detail": "You are not authorized to confirm this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		registration.status = "APPROVED"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_arrived(self, request, pk=None):
+		registration = self.get_object()
+		
+		# Check authorization
+		is_authorized = False
+		if registration.event.hospital.user == request.user:
+			is_authorized = True
+		if not is_authorized:
+			try:
+				hospital = Hospital.objects.get(user=request.user)
+				if registration.event.hospital == hospital:
+					is_authorized = True
+			except Hospital.DoesNotExist:
+				pass
+
+		if not is_authorized:
+			return Response({"detail": "You are not authorized to mark this arrival."}, status=status.HTTP_403_FORBIDDEN)
+
+		registration.status = "ARRIVED"
+		registration.arrived_at = timezone.now()
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject(self, request, pk=None):
+		"""Hospital rejects a pending registration"""
+		registration = self.get_object()
+		
+		# Check authorization
+		is_authorized = False
+		if registration.event.hospital.user == request.user:
+			is_authorized = True
+		if not is_authorized:
+			try:
+				hospital = Hospital.objects.get(user=request.user)
+				if registration.event.hospital == hospital:
+					is_authorized = True
+			except Hospital.DoesNotExist:
+				pass
+
+		if not is_authorized:
+			return Response({"detail": "You are not authorized to reject this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		if registration.status != "PENDING":
+			return Response({"detail": "Can only reject pending registrations."}, status=status.HTTP_400_BAD_REQUEST)
+
+		registration.status = "REJECTED"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_coming(self, request, pk=None):
+		"""Donor confirms they are coming to the event"""
+		registration = self.get_object()
+		# Only the registered donor can confirm
+		if registration.donor != request.user:
+			return Response({"detail": "You are not authorized to confirm this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		if registration.status != "APPROVED":
+			return Response({"detail": "Can only confirm coming for approved registrations."}, status=status.HTTP_400_BAD_REQUEST)
+
+		registration.status = "COMING"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def donor_cancel(self, request, pk=None):
+		"""Donor cancels their registration"""
+		registration = self.get_object()
+		# Only the registered donor can cancel
+		if registration.donor != request.user:
+			return Response({"detail": "You are not authorized to cancel this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		if registration.status not in ["PENDING", "APPROVED", "COMING"]:
+			return Response({"detail": "Cannot cancel a registration in its current state."}, status=status.HTTP_400_BAD_REQUEST)
+
+		registration.status = "NOT_COMING"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	def destroy(self, request, *args, **kwargs):
+		instance = self.get_object()
+		
+		# Check authorization
+		is_hospital_authorized = False
+		# 1. Direct ownership check
+		if instance.event.hospital.user == request.user:
+			is_hospital_authorized = True
+		# 2. Hospital profile check (fallback)
+		if not is_hospital_authorized:
+			try:
+				hospital = Hospital.objects.get(user=request.user)
+				if instance.event.hospital == hospital:
+					is_hospital_authorized = True
+			except Hospital.DoesNotExist:
+				pass
+		
+		# Allow donor to delete their own pending/cancelled registration
+		is_donor_authorized = instance.donor == request.user
+		
+		if not (is_hospital_authorized or is_donor_authorized):
+			return Response({"detail": "You are not authorized to delete this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		self.perform_destroy(instance)
+		return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 
 class MedicalEssentialViewSet(viewsets.ModelViewSet):

@@ -61,6 +61,11 @@ class User(AbstractUser):
     def __str__(self):
         return f"{self.email} ({self.role})"
 
+    @property
+    def hospital_profile(self):
+        """Helper to get the associated hospital object for this user"""
+        return self.hospital_accounts.first()
+
 
 class DonorProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="donor_profile")
@@ -69,6 +74,14 @@ class DonorProfile(models.Model):
     is_platelet_donor = models.BooleanField(default=False)
     last_donated_on = models.DateField(null=True, blank=True)
     is_available = models.BooleanField(default=True)
+    
+    # Health Verification Fields
+    age = models.PositiveIntegerField(null=True, blank=True, help_text="Donor's age in years")
+    weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Donor's weight in kg")
+    
+    # Reward System Fields
+    current_stars = models.PositiveIntegerField(default=0, help_text="Stars earned since last reward reset (0-50)")
+    total_money_earned = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="Total monetary rewards earned (Rs)")
 
 
 class TimeStampedModel(models.Model):
@@ -141,8 +154,42 @@ class OrganDonor(TimeStampedModel):
 	emergency_contact_phone = models.CharField(max_length=32, blank=True)
 	emergency_contact_relation = models.CharField(max_length=100, blank=True)
 
+	# Pledge Commitment Workflow
+	STATUS_CHOICES = [
+		("PENDING", "Pending"),
+		("ACCEPTED", "Hospital Accepted"),
+		("COMMITTED", "Committed"),
+		("BODY_RECEIVED", "Body Received"),
+		("COMPLETED", "Completed"),
+		("CANCELLED", "Cancelled"),
+	]
+	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PENDING")
+	hospital_message = models.TextField(blank=True, help_text="Message from the hospital upon acceptance")
+	accepted_by_hospital = models.ForeignKey(
+		"Hospital", 
+		on_delete=models.SET_NULL, 
+		null=True, 
+		blank=True, 
+		related_name="accepted_organ_pledges"
+	)
+	
+	# Completion details
+	body_received_at = models.DateTimeField(null=True, blank=True)
+	payment_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Amount paid to family/contact")
+	payment_date = models.DateTimeField(null=True, blank=True)
+
 	def __str__(self) -> str:
-		return f"OrganDonor<{self.user.username}>"
+		return f"OrganDonor<{self.created_by.username}>"
+
+
+class DonorCoupon(TimeStampedModel):
+	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="coupons")
+	code = models.CharField(max_length=50, unique=True)
+	discount_percentage = models.PositiveIntegerField(default=20)
+	is_used = models.BooleanField(default=False)
+	
+	def __str__(self) -> str:
+		return f"Coupon<{self.code}> - {self.donor.email}"
 
 
 class Hospital(TimeStampedModel):
@@ -158,6 +205,7 @@ class Hospital(TimeStampedModel):
 	zip_code = models.CharField(max_length=20, blank=True)
 	address = models.TextField(blank=True)
 	phone = models.CharField(max_length=32, blank=True)
+	email = models.EmailField(max_length=255, blank=True, null=True)
 	website = models.URLField(blank=True)
 	latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, help_text="For location-based search")
 	longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, help_text="For location-based search")
@@ -248,6 +296,7 @@ class Appointment(TimeStampedModel):
 	]
 
 	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="appointments")
+	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="appointments", null=True, blank=True)
 	doctor = models.ForeignKey("Doctor", on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
 	donation_request = models.ForeignKey("DonationRequest", on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
 	appointment_date = models.DateTimeField()
@@ -256,6 +305,7 @@ class Appointment(TimeStampedModel):
 	notes = models.TextField(blank=True)
 	charges = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Appointment charges")
 	currency = models.CharField(max_length=8, default="INR")
+	rejection_reason = models.TextField(blank=True, help_text="Reason for rejection or rescheduling")
 
 	def __str__(self) -> str:
 		return f"Appointment:  {self.hospital.name} on {self.appointment_date}"
@@ -315,17 +365,31 @@ class DonationRequest(TimeStampedModel):
 	STATUS_CHOICES = [
 		("PENDING", "Pending"),
 		("ACCEPTED", "Accepted"),
+		("ARRIVED", "Arrived"),
 		("REJECTED", "Rejected"),
 		("COMPLETED", "Completed"),
 		("CANCELLED", "Cancelled"),
 	]
 
+	REQUEST_TYPES = [
+		("BLOOD", "Blood"),
+		("ORGAN", "Organ"),
+		("PLATELETS", "Platelets"),
+	]
+
 	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="donation_requests")
 	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="donor_requests", null=True, blank=True)
+	request_type = models.CharField(max_length=16, choices=REQUEST_TYPES, default="BLOOD")
 	status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="PENDING")
 	message = models.TextField(blank=True)
 	scheduled_date = models.DateTimeField(null=True, blank=True)
-	notes = models.TextField(blank=True, help_text="Hospital staff notes")
+	patient_name = models.CharField(max_length=200, blank=True, help_text="Name of the patient the donation is for")
+	notes = models.TextField(blank=True, help_text="Hospital staff staff notes")
+	confirmed_arrival_at = models.DateTimeField(null=True, blank=True)
+	
+	# Health Verification (from Donor)
+	health_status = models.CharField(max_length=100, blank=True, null=True, help_text="Summary of health assessment")
+	health_report = models.FileField(upload_to="health_reports/", blank=True, null=True)
 
 	def __str__(self) -> str:
 		return f"Donation request from {self.hospital.name} - {self.status}"
@@ -469,6 +533,46 @@ class BloodDonationEvent(TimeStampedModel):
 
 	def __str__(self) -> str:
 		return f"{self.title} - {self.hospital.name} ({self.event_date})"
+
+
+class EventRegistration(TimeStampedModel):
+	"""Registration for blood donation events"""
+	STATUS_CHOICES = [
+		("PENDING", "Pending"),
+		("APPROVED", "Approved"),
+		("REJECTED", "Rejected"),
+		("COMING", "Coming"),
+		("NOT_COMING", "Not Coming"),
+		("ARRIVED", "Arrived"),
+		("CANCELLED", "Cancelled"),
+	]
+	
+	event = models.ForeignKey(BloodDonationEvent, on_delete=models.CASCADE, related_name="registrations")
+	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="event_registrations")
+	status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="PENDING")
+	invoice_number = models.CharField(max_length=50, unique=True, blank=True)
+	verification_document = models.CharField(max_length=500, blank=True, null=True, help_text="URL or path to uploaded verification document")
+	registered_at = models.DateTimeField(auto_now_add=True)
+	arrived_at = models.DateTimeField(null=True, blank=True)
+	
+	def generate_invoice_number(self):
+		if not self.invoice_number:
+			import random
+			import string
+			from django.utils import timezone
+			date_str = self.registered_at.strftime("%Y%m%d") if self.registered_at else timezone.now().strftime("%Y%m%d")
+			random_part = ''.join(random.choices(string.digits, k=6))
+			self.invoice_number = f"EVT-{date_str}-{random_part}"
+		return self.invoice_number
+
+	def save(self, *args, **kwargs):
+		if not self.invoice_number:
+			self.generate_invoice_number()
+		super().save(*args, **kwargs)
+
+	def __str__(self):
+		return f"{self.donor.email} registered for {self.event.title}"
+
 
 
 class MedicalEssential(TimeStampedModel):
@@ -677,6 +781,9 @@ class PatientVisit(TimeStampedModel):
 	currency = models.CharField(max_length=8, default="INR")
 	notes = models.TextField(blank=True, help_text="Details of what was done during the visit")
 	performance_notes = models.TextField(blank=True, help_text="Performance tracking notes")
+	rewards = models.TextField(blank=True, help_text="Rewards given to the donor")
+	fruity_given = models.BooleanField(default=False)
+	star_reward = models.BooleanField(default=False)
 	
 	def __str__(self) -> str:
 		return f"Visit: {self.patient.email} at {self.hospital.name} on {self.visit_date}"
