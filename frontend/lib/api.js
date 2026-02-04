@@ -88,8 +88,8 @@ export async function apiFetch(path, options = {}) {
 		headers.set("Content-Type", "application/json")
 	}
 
-	
-	
+
+
 	let token = getBrowserToken()
 	console.log('token', token);
 
@@ -142,8 +142,9 @@ export async function apiFetch(path, options = {}) {
 					const alreadyRedirecting = sessionStorage.getItem("lifesaver:auth_redirecting") === "1"
 					const onAuthPage = window.location.pathname.startsWith("/auth")
 					if (!onAuthPage && !alreadyRedirecting) {
+						const isHospitalPage = window.location.pathname.includes("/hospital")
 						sessionStorage.setItem("lifesaver:auth_redirecting", "1")
-						window.location.href = "/auth/login?module=donor"
+						window.location.href = `/auth/login?module=${isHospitalPage ? "hospital" : "donor"}`
 						return
 					}
 				}

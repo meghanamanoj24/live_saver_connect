@@ -359,10 +359,10 @@ export default function DonorProfile() {
 							{statusMessage && (
 								<div
 									className={`rounded-2xl border px-4 py-3 text-sm ${statusMessage.type === "success"
-											? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
-											: statusMessage.type === "info"
-												? "border-[#4e7fff] bg-[#4e7fff]/10 text-[#d7dcff]"
-												: "border-rose-400 bg-rose-500/10 text-rose-200"
+										? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
+										: statusMessage.type === "info"
+											? "border-[#4e7fff] bg-[#4e7fff]/10 text-[#d7dcff]"
+											: "border-rose-400 bg-rose-500/10 text-rose-200"
 										}`}
 								>
 									{statusMessage.text}

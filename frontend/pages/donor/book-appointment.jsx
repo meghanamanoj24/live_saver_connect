@@ -11,6 +11,8 @@ export default function BookAppointment() {
     const [doctors, setDoctors] = useState([])
     const [loading, setLoading] = useState(true)
     const [submitting, setSubmitting] = useState(false)
+    const [appointments, setAppointments] = useState([])
+    const [actionLoading, setActionLoading] = useState(null)
     const [formData, setFormData] = useState({
         hospital_id: hospitalId || "",
         doctor_id: "",
@@ -21,6 +23,7 @@ export default function BookAppointment() {
 
     useEffect(() => {
         loadHospitals()
+        loadAppointments()
     }, [])
 
     useEffect(() => {
@@ -51,6 +54,54 @@ export default function BookAppointment() {
             setDoctors(data)
         } catch (error) {
             console.error("Error loading doctors:", error)
+        }
+    }
+
+    async function loadAppointments() {
+        try {
+            const data = await apiFetch("/appointments/?donor=me")
+            setAppointments(data)
+        } catch (error) {
+            console.error("Error loading appointments:", error)
+        }
+    }
+
+    async function handleConfirmAppointment(id) {
+        setActionLoading(id)
+        try {
+            await apiFetch(`/appointments/${id}/confirm/`, { method: "POST" })
+            await loadAppointments()
+            alert("Appointment confirmed!")
+        } catch (error) {
+            alert(error.message || "Failed to confirm appointment.")
+        } finally {
+            setActionLoading(null)
+        }
+    }
+
+    async function handleDeclineAppointment(id) {
+        setActionLoading(id)
+        try {
+            await apiFetch(`/appointments/${id}/decline/`, { method: "POST" })
+            await loadAppointments()
+            alert("Appointment declined.")
+        } catch (error) {
+            alert(error.message || "Failed to decline appointment.")
+        } finally {
+            setActionLoading(null)
+        }
+    }
+
+    async function handleAcknowledgeAppointment(id) {
+        setActionLoading(id)
+        try {
+            await apiFetch(`/appointments/${id}/acknowledge/`, { method: "POST" })
+            await loadAppointments()
+            alert("Record cleared. You can now book a new appointment when ready.")
+        } catch (error) {
+            alert(error.message || "Failed to complete procedure.")
+        } finally {
+            setActionLoading(null)
         }
     }
 
@@ -162,6 +213,7 @@ export default function BookAppointment() {
                                     <input
                                         type="time"
                                         required
+                                        min={formData.appointment_date === new Date().toISOString().split("T")[0] ? new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : undefined}
                                         value={formData.appointment_time}
                                         onChange={(e) => setFormData({ ...formData, appointment_time: e.target.value })}
                                         className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-4 py-3 text-white outline-none focus:border-[#E91E63] transition"
@@ -188,6 +240,84 @@ export default function BookAppointment() {
                                 {submitting ? "Processing..." : "Send Appointment Request"}
                             </button>
                         </form>
+                    </div>
+
+                    <div className="mt-12 space-y-8">
+                        <div className="border-b border-[#F6D6E3]/20 pb-4">
+                            <h2 className="text-xl font-bold uppercase tracking-tight">Your Recent Appointments</h2>
+                            <p className="text-xs text-pink-100/60 mt-1">Check and confirm slots approved by hospitals.</p>
+                        </div>
+
+                        <div className="space-y-4">
+                            {appointments.map((appt) => {
+                                const statusColors = {
+                                    PENDING: "text-yellow-400 bg-yellow-400/10",
+                                    APPROVED: "text-green-400 bg-green-400/10 border-green-500",
+                                    SCHEDULED: "text-blue-400 bg-blue-400/10",
+                                    CANCELLED: "text-red-400 bg-red-400/10",
+                                    NO_SHOW: "text-orange-400 bg-orange-400/10 border-orange-500",
+                                }
+                                const statusColor = statusColors[appt.status] || "text-gray-400 bg-gray-400/10"
+
+                                return (
+                                    <div key={appt.id} className={`rounded-xl border border-[#F6D6E3]/20 bg-[#131326] p-6 transition ${appt.status === 'APPROVED' ? 'ring-2 ring-green-500/30' : appt.status === 'NO_SHOW' ? 'ring-2 ring-orange-500/30 bg-orange-500/5' : ''}`}>
+                                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                            <div>
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <h3 className="font-bold text-lg">{appt.hospital?.name}</h3>
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest ${statusColor}`}>
+                                                        {appt.status}
+                                                    </span>
+                                                </div>
+                                                <div className="space-y-1 text-sm text-pink-100/70">
+                                                    <p>📅 {new Date(appt.appointment_date).toLocaleDateString()} {appt.appointment_time && `at ${appt.appointment_time}`}</p>
+                                                    {appt.doctor?.name && <p>👨‍⚕️ Dr. {appt.doctor.name}</p>}
+                                                    {appt.notes && <p className={`italic text-xs mt-2 ${appt.status === 'NO_SHOW' ? 'text-orange-300 font-bold opacity-100' : 'opacity-60'}`}>
+                                                        {appt.notes}
+                                                    </p>}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex gap-3">
+                                                {appt.status === "APPROVED" && (
+                                                    <>
+                                                        <button
+                                                            disabled={actionLoading === appt.id}
+                                                            onClick={() => handleConfirmAppointment(appt.id)}
+                                                            className="rounded-lg bg-green-600 px-6 py-2 text-xs font-black uppercase tracking-widest text-white hover:bg-green-500 transition shadow-lg shadow-green-900/40 disabled:opacity-50"
+                                                        >
+                                                            {actionLoading === appt.id ? "..." : "Confirm Slot"}
+                                                        </button>
+                                                        <button
+                                                            disabled={actionLoading === appt.id}
+                                                            onClick={() => handleDeclineAppointment(appt.id)}
+                                                            className="rounded-lg border border-red-500/40 px-6 py-2 text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 transition disabled:opacity-50"
+                                                        >
+                                                            Decline
+                                                        </button>
+                                                    </>
+                                                )}
+                                                {appt.status === "NO_SHOW" && (
+                                                    <button
+                                                        disabled={actionLoading === appt.id}
+                                                        onClick={() => handleAcknowledgeAppointment(appt.id)}
+                                                        className="rounded-lg bg-orange-600 px-6 py-2 text-xs font-black uppercase tracking-widest text-white hover:bg-orange-500 transition shadow-lg shadow-orange-900/40 disabled:opacity-50"
+                                                    >
+                                                        {actionLoading === appt.id ? "..." : "ok complete the procedure there"}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+
+                            {appointments.length === 0 && (
+                                <div className="rounded-xl border border-dashed border-[#F6D6E3]/20 p-12 text-center bg-white/5">
+                                    <p className="text-pink-100/50">You haven't booked any appointments yet.</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </main>

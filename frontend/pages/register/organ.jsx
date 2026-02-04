@@ -4,6 +4,7 @@ import { useRouter } from "next/router"
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "../../lib/api"
 import { validatePhone, validateDateNotInFuture } from "../../lib/validation"
+import { generatePledgeReport as generatePdfDetails } from "../../lib/pdf-generator"
 
 const ORGAN_OPTIONS = [
 	{ id: "HEART", label: "Heart" },
@@ -68,6 +69,7 @@ export default function OrganRegistry() {
 	const [isAuthenticated, setIsAuthenticated] = useState(false)
 	const [isPageLoading, setIsPageLoading] = useState(false)
 	const [pledgeStatus, setPledgeStatus] = useState(null)
+	const [currentUser, setCurrentUser] = useState(null) // Added currentUser state
 	const [isEditing, setIsEditing] = useState(false)
 	const [form, setForm] = useState(DEFAULT_FORM)
 	const [isSubmitting, setIsSubmitting] = useState(false)
@@ -144,6 +146,10 @@ export default function OrganRegistry() {
 						apiFetch("/organ-donors/me/").catch(() => null),
 						apiFetch("/auth/users/me/").catch(() => null)
 					]);
+
+					if (!cancelled && userProfile) {
+						setCurrentUser(userProfile) // Store user profile
+					}
 
 					if (!cancelled && profile) {
 						setPledgeStatus(profile)
@@ -349,6 +355,28 @@ export default function OrganRegistry() {
 		}
 	}
 
+	async function handleCommitPledge() {
+		if (!pledgeStatus) return
+		setIsSubmitting(true)
+		try {
+			const response = await apiFetch(`/organ-donors/${pledgeStatus.id}/commit_pledge/`, {
+				method: "POST",
+			})
+			setPledgeStatus(response)
+			setFeedback({
+				type: "success",
+				message: "Pledge Committed! You have finalized your commitment to save lives.",
+			})
+		} catch (error) {
+			setFeedback({
+				type: "error",
+				message: error.message || "Commitment failed. Please try again.",
+			})
+		} finally {
+			setIsSubmitting(false)
+		}
+	}
+
 	async function handleDeceasedSubmit(event) {
 		event.preventDefault()
 		setFeedback(null)
@@ -390,173 +418,26 @@ export default function OrganRegistry() {
 	}
 
 	async function generatePledgeReport() {
-		try {
-			const { jsPDF } = await import("jspdf");
-			const doc = new jsPDF({
-				orientation: "portrait",
-				unit: "mm",
-				format: "a4"
-			});
-
-			const margin = 20;
-			const pageWidth = doc.internal.pageSize.getWidth();
-			const pageHeight = doc.internal.pageSize.getHeight();
-
-			// --- Official Background ---
-			doc.setFillColor(255, 255, 255);
-			doc.rect(0, 0, pageWidth, pageHeight, "F");
-
-			// Border
-			doc.setDrawColor(233, 30, 99);
-			doc.setLineWidth(1);
-			doc.rect(margin, margin, pageWidth - (margin * 2), pageHeight - (margin * 2), "S");
-
-			// --- Header ---
-			doc.setFillColor(26, 26, 46); // Dark primary
-			doc.rect(margin, margin, pageWidth - (margin * 2), 40, "F");
-
-			doc.setFontSize(24);
-			doc.setTextColor(255, 255, 255);
-			doc.setFont("helvetica", "bold");
-			doc.text("LIFESAVER CONNECT", margin + 10, margin + 20);
-
-			doc.setFontSize(14);
-			doc.setTextColor(233, 30, 99); // Pink
-			doc.text("OFFICIAL ORGAN DONATION PLEDGE", margin + 10, margin + 30);
-
-			doc.setFontSize(10);
-			doc.setTextColor(255, 255, 255);
-			doc.text(`Pledge ID: #${pledgeStatus?.id || "PENDING"}`, pageWidth - margin - 10, margin + 20, { align: "right" });
-			doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth - margin - 10, margin + 30, { align: "right" });
-
-			let yPos = margin + 55;
-
-			// --- Donor Details ---
-			doc.setFontSize(16);
-			doc.setTextColor(26, 26, 46);
-			doc.setFont("helvetica", "bold");
-			doc.text("I. DONOR INFORMATION", margin + 10, yPos);
-
-			doc.setDrawColor(200, 200, 200);
-			doc.setLineWidth(0.5);
-			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
-
-			yPos += 15;
-			doc.setFontSize(11);
-			doc.setFont("helvetica", "normal");
-			doc.setTextColor(60, 60, 60);
-
-			const details = [
-				{ label: "Blood Group", value: form.blood_group || "N/A" },
-				{ label: "Date of Birth", value: form.date_of_birth || "N/A" },
-				{ label: "Phone", value: form.phone || "N/A" },
-				{ label: "Address", value: doc.splitTextToSize(form.address || "N/A", 100) },
-			];
-
-			details.forEach(item => {
-				doc.setFont("helvetica", "bold");
-				doc.text(`${item.label}:`, margin + 15, yPos);
-				doc.setFont("helvetica", "normal");
-				if (Array.isArray(item.value)) {
-					doc.text(item.value, margin + 60, yPos);
-					yPos += (item.value.length * 6) + 4;
-				} else {
-					doc.text(item.value, margin + 60, yPos);
-					yPos += 8;
-				}
-			});
-
-			yPos += 10;
-			// --- Emergency Contact ---
-			doc.setFontSize(16);
-			doc.setTextColor(26, 26, 46);
-			doc.setFont("helvetica", "bold");
-			doc.text("II. EMERGENCY CONTACT", margin + 10, yPos);
-			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
-
-			yPos += 15;
-			doc.setFontSize(11);
-			doc.setFont("helvetica", "normal");
-
-			doc.setFont("helvetica", "bold");
-			doc.text("Name:", margin + 15, yPos);
-			doc.setFont("helvetica", "normal");
-			doc.text(form.emergency_contact_name || "N/A", margin + 60, yPos);
-
-			yPos += 8;
-			doc.setFont("helvetica", "bold");
-			doc.text("Phone:", margin + 15, yPos);
-			doc.setFont("helvetica", "normal");
-			doc.text(form.emergency_contact_phone || "N/A", margin + 60, yPos);
-
-			yPos += 8;
-			doc.setFont("helvetica", "bold");
-			doc.text("Relation:", margin + 15, yPos);
-			doc.setFont("helvetica", "normal");
-			doc.text(form.emergency_contact_relation || "N/A", margin + 60, yPos);
-
-
-			yPos += 20;
-			// --- Pledge Details ---
-			doc.setFontSize(16);
-			doc.setTextColor(26, 26, 46);
-			doc.setFont("helvetica", "bold");
-			doc.text("III. PLEDGE COMMITMENT", margin + 10, yPos);
-			doc.line(margin + 10, yPos + 3, pageWidth - margin - 10, yPos + 3);
-
-			yPos += 15;
-			doc.setFillColor(233, 30, 99, 0.1); // Light pink
-			doc.setDrawColor(233, 30, 99);
-			doc.roundedRect(margin + 10, yPos - 5, pageWidth - (margin * 2) - 20, 30, 2, 2, "FD");
-
-			doc.setFontSize(12);
-			doc.setTextColor(233, 30, 99);
-			doc.text("Organs Pledged:", margin + 20, yPos + 5);
-
-			const organsList = form.organs_to_donate.includes("ALL") ? "ALL ORGANS" : form.organs_to_donate.join(", ");
-			doc.setFontSize(14);
-			doc.setTextColor(26, 26, 46);
-			doc.text(organsList, margin + 20, yPos + 15);
-
-			yPos += 40;
-			// --- Declaration ---
-			doc.setFontSize(10);
-			doc.setTextColor(100, 100, 100);
-			const declaration = "I hereby pledge to donate my organs after my death for therapeutic purposes. I understand that this pledge is voluntary and can be withdrawn at any time. I have informed my family about this decision.";
-			const splitDec = doc.splitTextToSize(declaration, pageWidth - (margin * 2) - 20);
-			doc.text(splitDec, margin + 10, yPos);
-
-			// --- Signatures ---
-			const sealY = pageHeight - margin - 50;
-
-			// Seal
-			const sealX = pageWidth - margin - 40;
-			doc.setDrawColor(233, 30, 99);
-			doc.setLineWidth(1.5);
-			doc.circle(sealX, sealY, 18, "S");
-			doc.circle(sealX, sealY, 16, "S");
-			doc.setFontSize(8);
-			doc.setTextColor(233, 30, 99);
-			doc.setFont("helvetica", "bold");
-			doc.text("LIFESAVER", sealX, sealY - 8, { align: "center" });
-			doc.text("REGISTERED", sealX, sealY + 10, { align: "center" });
-			doc.setFontSize(6);
-			doc.text("VERIFIED PLEDGE", sealX, sealY, { align: "center" });
-
-			// Donor Sig
-			doc.setDrawColor(0, 0, 0);
-			doc.setLineWidth(0.5);
-			doc.line(margin + 10, sealY + 10, margin + 70, sealY + 10);
-			doc.setFontSize(10);
-			doc.setTextColor(0, 0, 0);
-			doc.text("Donor Signature", margin + 40, sealY + 16, { align: "center" });
-
-			doc.save("Organ_Donation_Pledge_Report.pdf");
-
-		} catch (err) {
-			console.error(err);
-			alert("Error generating report. Please try again.");
+		const reportData = {
+			id: pledgeStatus?.id || "PENDING",
+			user: pledgeStatus?.user || currentUser || {},
+			blood_group: pledgeStatus?.blood_group || form.blood_group,
+			date_of_birth: pledgeStatus?.date_of_birth || form.date_of_birth,
+			phone: pledgeStatus?.phone || form.phone,
+			address: pledgeStatus?.address || form.address,
+			health_certificate: pledgeStatus?.health_certificate || form.health_certificate,
+			post_mortem_consent: pledgeStatus ? pledgeStatus.post_mortem_consent : form.post_mortem_consent,
+			family_responsibility: pledgeStatus ? pledgeStatus.family_responsibility : form.family_responsibility,
+			emergency_contact_name: pledgeStatus?.emergency_contact_name || form.emergency_contact_name,
+			emergency_contact_phone: pledgeStatus?.emergency_contact_phone || form.emergency_contact_phone,
+			emergency_contact_relation: pledgeStatus?.emergency_contact_relation || form.emergency_contact_relation,
+			organs: pledgeStatus?.organs ? pledgeStatus.organs : (form.organs_to_donate.includes("ALL") ? "ALL ORGANS" : form.organs_to_donate.join(", ")),
+			status: pledgeStatus?.status,
+			accepted_by_hospital_name: pledgeStatus?.accepted_by_hospital_name,
+			hospital_message: pledgeStatus?.hospital_message
 		}
+
+		await generatePdfDetails(reportData);
 	}
 	function startEditing() {
 		if (!pledgeStatus) return
@@ -578,9 +459,10 @@ export default function OrganRegistry() {
 		setFeedback(null)
 		try {
 			if (pledgeStatus) {
-				// Delete via the me endpoint or direct ID
-				await apiFetch(`/organ-donors/${pledgeStatus.id}/`, {
-					method: "DELETE",
+				// mark as CANCELLED instead of hard delete to notify hospital
+				await apiFetch(`/organ-donors/me/`, {
+					method: "PATCH",
+					body: JSON.stringify({ status: "CANCELLED" }),
 				})
 			}
 			setPledgeStatus(null)
@@ -724,9 +606,20 @@ export default function OrganRegistry() {
 										<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 											<div>
 												<h2 className="text-2xl font-semibold text-white">Your Organ Pledge</h2>
-												<p className="text-sm text-sky-100/70">
-													Update your commitment at any time. Verified transplant centres access this data securely with family approval.
-												</p>
+												<div className="flex items-center gap-2 mt-1">
+													<p className="text-sm text-sky-100/70">
+														Update your commitment at any time. Verified transplant centres access this data securely with family approval.
+													</p>
+													{pledgeStatus && (
+														<span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pledgeStatus.status === 'COMMITTED' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+															pledgeStatus.status === 'ACCEPTED' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+																pledgeStatus.status === 'BODY_RECEIVED' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+																	'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+															}`}>
+															{pledgeStatus.status}
+														</span>
+													)}
+												</div>
 											</div>
 											{pledgeStatus && !showForm && (
 												<div className="flex flex-wrap gap-3">
@@ -748,7 +641,7 @@ export default function OrganRegistry() {
 														type="button"
 														onClick={async () => {
 															try {
-																const res = await apiFetch("/organ-donors/me/notify_contact/", { method: "POST" });
+																const res = await apiFetch("/organ-donors/notify_contact/", { method: "POST" });
 																setFeedback({ type: "success", message: res.message });
 															} catch (err) {
 																setFeedback({ type: "error", message: err.message || "Failed to notify contact." });
@@ -762,7 +655,7 @@ export default function OrganRegistry() {
 														type="button"
 														onClick={async () => {
 															try {
-																const res = await apiFetch("/organ-donors/me/notify_hospitals/", { method: "POST" });
+																const res = await apiFetch("/organ-donors/notify_hospitals/", { method: "POST" });
 																setFeedback({ type: "success", message: res.message });
 															} catch (err) {
 																setFeedback({ type: "error", message: err.message || "Failed to transmit report to hospitals." });
@@ -782,6 +675,30 @@ export default function OrganRegistry() {
 												</div>
 											)}
 										</div>
+
+										{pledgeStatus && pledgeStatus.status === "ACCEPTED" && !showForm && (
+											<div className="mt-8 rounded-2xl border border-yellow-500/40 bg-yellow-500/5 p-6 transition-all animate-in fade-in slide-in-from-top-4 duration-500">
+												<div className="flex items-start gap-4">
+													<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-yellow-500/20 text-yellow-500">
+														<span className="text-xl">✉️</span>
+													</div>
+													<div className="flex-1">
+														<h3 className="text-lg font-bold text-white">Message from {pledgeStatus.accepted_by_hospital_name}</h3>
+														<p className="mt-2 text-pink-100/90 italic leading-relaxed">
+															"{pledgeStatus.hospital_message}"
+														</p>
+														<button
+															type="button"
+															onClick={handleCommitPledge}
+															disabled={isSubmitting}
+															className="mt-4 rounded-lg bg-yellow-600 px-6 py-2 text-sm font-bold text-white transition hover:bg-yellow-500 active:scale-95 disabled:opacity-50"
+														>
+															{isSubmitting ? "Processing..." : "OK - I Commit"}
+														</button>
+													</div>
+												</div>
+											</div>
+										)}
 
 										{showCancelConfirm && (
 											<div className="mt-6 rounded-2xl border border-[#DC2626]/40 bg-[#131326] p-6 text-sm text-[#FECACA]">

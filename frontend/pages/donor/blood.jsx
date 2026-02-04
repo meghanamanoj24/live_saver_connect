@@ -3,11 +3,14 @@ import Link from "next/link"
 import { useRouter } from "next/router"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { apiFetch } from "../../lib/api"
+import { jsPDF } from "jspdf"
 
 const DONATION_HISTORY_PLACEHOLDER = []
 const PLATELET_HISTORY_PLACEHOLDER = []
 const DONOR_PROFILE_STORAGE_KEY = "lifesaver:donor_profile"
 const DONATION_REQUESTS_STORAGE_KEY = "lifesaver:donation_requests"
+const HEALTH_REPORT_STORAGE_KEY_BLOOD = "lifesaver:health_report_uploaded_blood"
+const HEALTH_REPORT_FILENAME_KEY_BLOOD = "lifesaver:health_report_filename_blood"
 
 // Mock upcoming events data - will be replaced by API data if available
 const UPCOMING_EVENTS_FALLBACK = [
@@ -56,6 +59,16 @@ export default function BloodDonation() {
 	const [availabilitySaving, setAvailabilitySaving] = useState(false)
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
+	const [donationHistory, setDonationHistory] = useState([])
+	const [confirmingArrival, setConfirmingArrival] = useState(false)
+	const [coupons, setCoupons] = useState([])
+
+	// Verification Loop State
+	const [healthReportUploaded, setHealthReportUploaded] = useState(false)
+	const [healthReportFile, setHealthReportFile] = useState(null)
+	const [healthEligible, setHealthEligible] = useState(false)
+	const [showEligibilityPopup, setShowEligibilityPopup] = useState(false)
+	const [eligibilityMessage, setEligibilityMessage] = useState("")
 
 
 	// Availability Schedule
@@ -84,6 +97,8 @@ export default function BloodDonation() {
 		temperature: "",
 		lastMedication: "",
 		healthNotes: "",
+		age: "",
+		weight: "",
 	})
 	const [healthAssessment, setHealthAssessment] = useState(null)
 	const [medicineSuggestions, setMedicineSuggestions] = useState([])
@@ -149,7 +164,11 @@ export default function BloodDonation() {
 				// Also load hospital needs for matching blood group
 				if (data?.donor?.blood_group) {
 					try {
-						const hospitalNeeds = await apiFetch(`/hospital-needs/?donor_blood_group=${data.donor.blood_group}&active_only=true&need_type=BLOOD`)
+						let hospitalNeedsUrl = `/hospital-needs/?donor_blood_group=${data.donor.blood_group}&active_only=true&need_type=BLOOD`
+						if (data.donor.city) {
+							hospitalNeedsUrl += `&city=${encodeURIComponent(data.donor.city)}`
+						}
+						const hospitalNeeds = await apiFetch(hospitalNeedsUrl)
 						if (hospitalNeeds && hospitalNeeds.length > 0) {
 							// Merge hospital needs with emergency needs
 							data.recommended_needs = [...(data.recommended_needs || []), ...hospitalNeeds]
@@ -192,39 +211,108 @@ export default function BloodDonation() {
 
 		fetchDashboard()
 		loadDonationRequests()
-	}, [])
+		loadDonationHistory()
+		loadCoupons()
+	}, [fetchDashboard])
+
+	// Refresh requests when page becomes visible
+	useEffect(() => {
+		const handleVisibilityChange = () => {
+			if (document.visibilityState === "visible") {
+				loadDonationRequests()
+				fetchDashboard(false)
+			}
+		}
+		document.addEventListener("visibilitychange", handleVisibilityChange)
+		return () => {
+			document.removeEventListener("visibilitychange", handleVisibilityChange)
+		}
+	}, [fetchDashboard])
+
+	// Also refresh on focus
+	useEffect(() => {
+		const handleFocus = () => {
+			loadDonationRequests()
+			fetchDashboard(false)
+		}
+		window.addEventListener("focus", handleFocus)
+		return () => {
+			window.removeEventListener("focus", handleFocus)
+		}
+	}, [fetchDashboard])
 
 	async function loadDonationRequests() {
 		try {
-			const requests = await apiFetch("/donation-requests/?donor=me")
-			const filtered = requests.filter((request) => {
-				const hospital = request.hospital || {}
-				const hospitalName = hospital.name || ""
-				if (hospitalName.toLowerCase().includes("city general hospital") && request.status === "ACCEPTED") return false
-				return true
-			})
-			setDonationRequests(filtered)
+			const requests = await apiFetch("/donation-requests/?donor=me&request_type=BLOOD")
+			setDonationRequests(requests)
+
+			// Also sync to localStorage
 			if (typeof window !== "undefined") {
-				localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(filtered))
+				localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(requests))
 			}
-		} catch {
+		} catch (error) {
+			// Fallback to localStorage
 			if (typeof window !== "undefined") {
 				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
 				if (stored) {
 					try {
 						const requests = JSON.parse(stored)
-						const filtered = requests.filter((request) => {
-							const hospital = request.hospital || {}
-							const hospitalName = hospital.name || ""
-							if (hospitalName.toLowerCase().includes("city general hospital") && request.status === "ACCEPTED") return false
-							return true
-						})
+						// Filter for BLOOD type in local storage fallback too
+						const filtered = requests.filter(r => r.request_type === "BLOOD")
 						setDonationRequests(filtered)
-					} catch {
+					} catch (e) {
 						setDonationRequests([])
 					}
 				}
 			}
+		}
+	}
+
+	async function loadDonationHistory() {
+		try {
+			const history = await apiFetch("/patient-visits/?visit_purpose=BLOOD_DONATION")
+			setDonationHistory(history)
+		} catch (error) {
+			console.error("Error loading donation history:", error)
+		}
+	}
+
+	async function loadCoupons() {
+		try {
+			const data = await apiFetch("/donor-coupons/")
+			setCoupons(data)
+		} catch (error) {
+			console.error("Error loading coupons:", error)
+		}
+	}
+
+	async function handleConfirmArrival(requestId) {
+		setConfirmingArrival(true)
+		try {
+			await apiFetch(`/donation-requests/${requestId}/confirm_arrival/`, {
+				method: "POST"
+			})
+			await loadDonationRequests()
+			alert("Arrival confirmed! Please wait for the hospital staff to verify your donation.")
+		} catch (error) {
+			console.error("Error confirming arrival:", error)
+			alert("Failed to confirm arrival. Please try again.")
+		} finally {
+			setConfirmingArrival(false)
+		}
+	}
+
+	async function handleResubmitRequest(requestId) {
+		try {
+			await apiFetch(`/donation-requests/${requestId}/`, {
+				method: "PATCH",
+				body: JSON.stringify({ status: "PENDING", notes: "" })
+			})
+			await loadDonationRequests()
+			alert("Request resubmitted! Please wait for the hospital to review it.")
+		} catch (error) {
+			console.error("Error resubmitting request:", error)
+			alert("Failed to resubmit request. Please try again.")
 		}
 	}
 
@@ -296,14 +384,7 @@ export default function BloodDonation() {
 		})()
 		: "Not recorded"
 
-	const totalBloodDonations = useMemo(
-		() => DONATION_HISTORY_PLACEHOLDER.filter((entry) => entry.type === "Whole Blood" || entry.type === "Double Red Cells").length,
-		[],
-	)
-	const totalPlateletDonations = useMemo(
-		() => PLATELET_HISTORY_PLACEHOLDER.filter((entry) => entry.type === "Platelets").length,
-		[],
-	)
+	const totalBloodDonations = donationHistory.length
 
 	async function handleAvailabilityToggle() {
 		if (!displayDonor) return
@@ -324,6 +405,118 @@ export default function BloodDonation() {
 		} finally {
 			setAvailabilitySaving(false)
 		}
+	}
+
+	// Computed values for request cycle management
+	const hasActiveRequest = useMemo(() => {
+		return donationRequests.some(r => ["PENDING", "ACCEPTED", "ARRIVED"].includes(r.status))
+	}, [donationRequests])
+
+	const mostRecentRequest = useMemo(() => {
+		if (donationRequests.length === 0) return null
+		return donationRequests[0] // Already sorted by -created_at from API
+	}, [donationRequests])
+
+	// Determine if the donor can request a new donation
+	const canRequestNewDonation = useMemo(() => {
+		// Cannot request if there's an active request in progress
+		if (hasActiveRequest) return false
+		// Must have health report uploaded for this cycle
+		if (!healthReportUploaded) return false
+		// Must be health eligible
+		if (!healthEligible) return false
+		return true
+	}, [hasActiveRequest, healthReportUploaded, healthEligible])
+
+	// Load health report upload status and eligibility from localStorage
+	useEffect(() => {
+		if (typeof window === "undefined") return
+		const uploadStatus = localStorage.getItem(HEALTH_REPORT_STORAGE_KEY_BLOOD)
+		if (uploadStatus === "true") {
+			setHealthReportUploaded(true)
+		}
+
+		// Check health eligibility from health history
+		const savedHistory = localStorage.getItem("lifesaver:health_history")
+		if (savedHistory) {
+			try {
+				const history = JSON.parse(savedHistory)
+				if (history.length > 0) {
+					const lastEntry = history[history.length - 1]
+					// Score >= 80 means eligible
+					if (lastEntry.score >= 80) {
+						setHealthEligible(true)
+					}
+				}
+			} catch {
+				// Ignore parse errors
+			}
+		}
+	}, [])
+
+	// Reset health report status when donation is COMPLETED or REJECTED (for the cycle loop)
+	useEffect(() => {
+		if (typeof window === "undefined" || !mostRecentRequest) return
+
+		const lastResetId = localStorage.getItem("lifesaver:last_reset_request_id")
+
+		if (["COMPLETED", "REJECTED"].includes(mostRecentRequest.status) && lastResetId !== String(mostRecentRequest.id)) {
+			// Clear the health report for this cycle - donor must upload a new one
+			localStorage.removeItem(HEALTH_REPORT_STORAGE_KEY_BLOOD)
+			localStorage.removeItem(HEALTH_REPORT_FILENAME_KEY_BLOOD)
+			localStorage.setItem("lifesaver:last_reset_request_id", String(mostRecentRequest.id))
+			setHealthReportUploaded(false)
+			setHealthReportFile(null)
+		}
+	}, [mostRecentRequest])
+
+	function handleHealthReportUpload(e) {
+		const file = e.target.files[0]
+		if (!file) return
+
+		// Simulate validation
+		if (file.type !== "application/pdf") {
+			alert("Please upload a PDF file.")
+			return
+		}
+
+		if (file.size > 5 * 1024 * 1024) { // 5MB limit
+			alert("File size exceeds 5MB limit.")
+			return
+		}
+
+		setHealthReportFile(file)
+		// Simulate successful upload and verification
+		setTimeout(() => {
+			setHealthReportUploaded(true)
+			localStorage.setItem(HEALTH_REPORT_STORAGE_KEY_BLOOD, "true")
+			localStorage.setItem(HEALTH_REPORT_FILENAME_KEY_BLOOD, file.name)
+			alert("Health report uploaded and verified successfully!")
+			// Scroll to top
+			window.scrollTo({ top: 0, behavior: 'smooth' })
+		}, 1000)
+	}
+
+	function handleNewRequestClick(e) {
+		e.preventDefault() // Prevent default if it's a link click
+		// Check if there's already an active request
+		if (hasActiveRequest) {
+			setEligibilityMessage("You already have an active donation request. Please wait for it to be completed or resolved before requesting a new one.")
+			setShowEligibilityPopup(true)
+			return
+		}
+		if (!healthReportUploaded) {
+			setEligibilityMessage("Please upload your health report PDF first. Complete the health assessment below and upload the generated report.")
+			setShowEligibilityPopup(true)
+			return
+		}
+		if (!healthEligible) {
+			setEligibilityMessage("Your health status does not meet the eligibility criteria for blood donation. Please confirm your eligibility in the health assessment.")
+			setShowEligibilityPopup(true)
+			return
+		}
+		// Navigate to request page
+		window.location.href = "/donor/donate?type=BLOOD"
 	}
 
 	// Load saved availability schedule
@@ -355,6 +548,32 @@ export default function BloodDonation() {
 		let canDonate = true
 		let recommendation = ""
 		const medicines = []
+
+		// Check age requirement (must be >= 18)
+		const age = parseInt(healthStatus.age)
+		if (!age || age < 18) {
+			healthScore -= 50
+			canDonate = false
+			if (!age) {
+				recommendation = "Please enter your age to determine donation eligibility."
+			} else {
+				recommendation = "You must be at least 18 years old to donate blood. The minimum age requirement is for your safety and health."
+			}
+		}
+
+		// Check weight requirement (must be > 50 kg)
+		const weight = parseFloat(healthStatus.weight)
+		if (!weight || weight <= 50) {
+			healthScore -= 50
+			canDonate = false
+			if (!weight) {
+				if (recommendation) recommendation += " "
+				recommendation += "Please enter your weight to determine donation eligibility."
+			} else {
+				if (recommendation) recommendation += " "
+				recommendation += "You must weigh more than 50 kg (110 lbs) to donate blood. This requirement ensures you have sufficient blood volume for safe donation."
+			}
+		}
 
 		// Deduct points for symptoms
 		if (healthStatus.fever) {
@@ -476,6 +695,130 @@ export default function BloodDonation() {
 		}
 	}
 
+	// Generate Health Report PDF
+	function generateHealthReportPDF() {
+		if (!healthAssessment || !healthAssessment.canDonate) {
+			alert("You must complete a health assessment and be eligible before downloading the report.")
+			return
+		}
+
+		const doc = new jsPDF()
+		const pageWidth = doc.internal.pageSize.getWidth()
+		const pageHeight = doc.internal.pageSize.getHeight()
+
+		// Header
+		doc.setFillColor(233, 30, 99) // #E91E63
+		doc.rect(0, 0, pageWidth, 40, 'F')
+
+		doc.setTextColor(255, 255, 255)
+		doc.setFontSize(24)
+		doc.setFont(undefined, 'bold')
+		doc.text("HEALTH STATUS REPORT", pageWidth / 2, 20, { align: 'center' })
+
+		doc.setFontSize(12)
+		doc.setFont(undefined, 'normal')
+		doc.text("LifeSaver Connect", pageWidth / 2, 30, { align: 'center' })
+
+		// Reset text color
+		doc.setTextColor(0, 0, 0)
+
+		let yPos = 55
+
+		// Donor Information Section
+		doc.setFontSize(16)
+		doc.setFont(undefined, 'bold')
+		doc.text("Donor Information", 20, yPos)
+		yPos += 10
+
+		doc.setFontSize(11)
+		doc.setFont(undefined, 'normal')
+		doc.text(`Name: ${displayDonor?.name || 'Not provided'}`, 25, yPos)
+		yPos += 7
+		doc.text(`Blood Group: ${displayDonor?.blood_group || 'Not provided'}`, 25, yPos)
+		yPos += 7
+		doc.text(`Age: ${healthStatus.age || 'Not provided'} years`, 25, yPos)
+		yPos += 7
+		doc.text(`Weight: ${healthStatus.weight || 'Not provided'} kg`, 25, yPos)
+		yPos += 15
+
+		// Health Assessment Section
+		doc.setFontSize(16)
+		doc.setFont(undefined, 'bold')
+		doc.text("Health Assessment", 20, yPos)
+		yPos += 10
+
+		doc.setFontSize(11)
+		doc.setFont(undefined, 'normal')
+		doc.text(`Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 25, yPos)
+		yPos += 7
+		doc.text(`Health Score: ${healthAssessment.healthScore}/100`, 25, yPos)
+		yPos += 7
+
+		// Status with color
+		doc.setFont(undefined, 'bold')
+		if (healthAssessment.canDonate) {
+			doc.setTextColor(0, 128, 0) // Green
+			doc.text("Status: ELIGIBLE FOR DONATION", 25, yPos)
+		} else {
+			doc.setTextColor(255, 0, 0) // Red
+			doc.text("Status: NOT ELIGIBLE FOR DONATION", 25, yPos)
+		}
+		doc.setTextColor(0, 0, 0)
+		doc.setFont(undefined, 'normal')
+		yPos += 15
+
+		// Symptoms Section
+		doc.setFontSize(16)
+		doc.setFont(undefined, 'bold')
+		doc.text("Symptoms Reported", 20, yPos)
+		yPos += 10
+
+		doc.setFontSize(11)
+		doc.setFont(undefined, 'normal')
+		if (healthAssessment.symptoms && healthAssessment.symptoms.length > 0) {
+			healthAssessment.symptoms.forEach(symptom => {
+				doc.text(`• ${symptom}`, 25, yPos)
+				yPos += 6
+			})
+		} else {
+			doc.text("No symptoms reported", 25, yPos)
+			yPos += 6
+		}
+		yPos += 10
+
+		// Recommendation Section
+		doc.setFontSize(16)
+		doc.setFont(undefined, 'bold')
+		doc.text("Recommendation", 20, yPos)
+		yPos += 10
+
+		doc.setFontSize(11)
+		doc.setFont(undefined, 'normal')
+		const splitRecommendation = doc.splitTextToSize(healthAssessment.recommendation || healthAssessment.message, pageWidth - 50)
+		doc.text(splitRecommendation, 25, yPos)
+		yPos += splitRecommendation.length * 6 + 15
+
+		// Validity Notice
+		doc.setFillColor(240, 240, 240)
+		doc.rect(20, yPos, pageWidth - 40, 20, 'F')
+		doc.setFontSize(10)
+		doc.setFont(undefined, 'italic')
+		doc.text("This report is valid for 30 days from the date of assessment.", pageWidth / 2, yPos + 10, { align: 'center' })
+		doc.text("Please present this report when requesting blood/platelet donations.", pageWidth / 2, yPos + 16, { align: 'center' })
+
+		// Footer
+		doc.setFontSize(8)
+		doc.setFont(undefined, 'normal')
+		doc.text(`Generated on: ${new Date().toLocaleString()}`, pageWidth / 2, pageHeight - 10, { align: 'center' })
+
+		// Save the PDF
+		const fileName = `Health_Report_${displayDonor?.name?.replace(/\s+/g, '_') || 'Donor'}_${new Date().toISOString().split('T')[0]}.pdf`
+		doc.save(fileName)
+
+		// Show success message
+		alert("Health report downloaded successfully! You can now upload this report when requesting platelet donations.")
+	}
+
 	// Load health history from localStorage
 	useEffect(() => {
 		if (typeof window === "undefined") return
@@ -541,11 +884,16 @@ export default function BloodDonation() {
 									View Emergency Requests
 								</a>
 							</Link>
-							<Link href="/donor/donate" legacyBehavior>
-								<a className="rounded-lg bg-[#E91E63] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition">
-									Find Hospital / Book Slot
-								</a>
-							</Link>
+							<button
+								onClick={handleNewRequestClick}
+								className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition ${canRequestNewDonation
+									? "bg-[#E91E63] hover:opacity-90"
+									: "bg-slate-700 opacity-70 cursor-not-allowed"
+									}`}
+								disabled={!canRequestNewDonation}
+							>
+								Find Hospital / Book Slot
+							</button>
 							<Link href="/register/donor" legacyBehavior>
 								<a className="rounded-lg bg-[#E91E63] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition">
 									Update Donor Profile
@@ -567,6 +915,52 @@ export default function BloodDonation() {
 						</div>
 					) : (
 						<>
+							{/* Verification Status Banners */}
+							<div className="grid gap-4 md:grid-cols-2">
+								{/* Active Request Banner */}
+								{hasActiveRequest && (
+									<div className="rounded-xl border border-blue-500/40 bg-blue-500/10 p-4 flex items-center gap-3">
+										<div className="h-10 w-10 flex items-center justify-center rounded-full bg-blue-500/20 text-blue-300">
+											<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+												<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+											</svg>
+										</div>
+										<div>
+											<p className="font-semibold text-blue-300">Active Request In Progress</p>
+											<p className="text-xs text-blue-200/70">You cannot make a new request until your current one is completed.</p>
+										</div>
+									</div>
+								)}
+
+								{/* Health Verification Banner */}
+								{!hasActiveRequest && (
+									healthReportUploaded ? (
+										<div className="rounded-xl border border-green-500/40 bg-green-500/10 p-4 flex items-center gap-3">
+											<div className="h-10 w-10 flex items-center justify-center rounded-full bg-green-500/20 text-green-300">
+												<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+												</svg>
+											</div>
+											<div>
+												<p className="font-semibold text-green-300">Health Verified</p>
+												<p className="text-xs text-green-200/70">You are eligible to request a donation.</p>
+											</div>
+										</div>
+									) : (
+										<div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-4 flex items-center gap-3">
+											<div className="h-10 w-10 flex items-center justify-center rounded-full bg-yellow-500/20 text-yellow-300">
+												<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+												</svg>
+											</div>
+											<div>
+												<p className="font-semibold text-yellow-300">Health Verification Required</p>
+												<p className="text-xs text-yellow-200/70">Please complete the health assessment and upload your report below.</p>
+											</div>
+										</div>
+									)
+								)}
+							</div>
 							{errorState?.type === "profile-missing" && (
 								<div className="rounded-2xl border border-[#4e7fff]/40 bg-[#102040] p-8 text-sm text-[#d7dcff]">
 									<h2 className="text-xl font-semibold text-white">Complete your donor profile</h2>
@@ -596,17 +990,47 @@ export default function BloodDonation() {
 								</div>
 								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg shadow-[#e91e6315]">
 									<p className="text-sm text-pink-100/80">Blood Donations Recorded</p>
-									<h2 className="mt-3 text-2xl font-bold text-white">{totalBloodDonations}</h2>
+									<h2 className="mt-3 text-2xl font-bold text-white">{displayDonor?.current_stars || 0}</h2>
 									<p className="mt-2 text-sm text-pink-100/70">
 										These numbers update after each verified donation from partner centres.
 									</p>
 								</div>
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg shadow-[#e91e6315]">
-									<p className="text-sm text-pink-100/80">Platelet Donations Recorded</p>
-									<h2 className="mt-3 text-2xl font-bold text-white">{totalPlateletDonations}</h2>
-									<p className="mt-2 text-sm text-pink-100/70">
-										Track apheresis donations separately. Hospitals confirm each platelet donation after review.
-									</p>
+								<div className="rounded-2xl border border-yellow-500/30 bg-[#131326] p-6 shadow-lg shadow-yellow-500/5 flex items-center justify-between">
+									<div>
+										<p className="text-sm text-pink-100/80">Star Reward Progress</p>
+										<h2 className="mt-3 text-2xl font-bold text-white">{(displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0)} / 50 Stars</h2>
+										<p className="mt-2 text-xs text-yellow-100/60 leading-relaxed">
+											Earn 50 stars to receive <span className="text-yellow-400 font-bold">50 Rs</span> & <span className="text-yellow-400 font-bold">20% Discount Coupon</span>!
+										</p>
+									</div>
+									<div className="relative h-20 w-20 flex-shrink-0">
+										<svg className="h-full w-full" viewBox="0 0 100 100">
+											<circle
+												className="text-white/10"
+												strokeWidth="10"
+												stroke="currentColor"
+												fill="transparent"
+												r="40"
+												cx="50"
+												cy="50"
+											/>
+											<circle
+												className="text-yellow-500 transition-all duration-1000 ease-out"
+												strokeWidth="10"
+												strokeDasharray={251.2}
+												strokeDashoffset={251.2 - (251.2 * ((displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0))) / 50}
+												strokeLinecap="round"
+												stroke="currentColor"
+												fill="transparent"
+												r="40"
+												cx="50"
+												cy="50"
+											/>
+										</svg>
+										<div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-yellow-500">
+											{Math.round((((displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0)) / 50) * 100)}%
+										</div>
+									</div>
 								</div>
 							</div>
 
@@ -760,6 +1184,7 @@ export default function BloodDonation() {
 																<label className="block text-xs font-medium text-pink-100/80 mb-1">Start Date</label>
 																<input
 																	type="date"
+																	min={new Date().toISOString().split("T")[0]}
 																	value={availabilitySchedule.startDate}
 																	onChange={(e) => setAvailabilitySchedule({ ...availabilitySchedule, startDate: e.target.value })}
 																	className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
@@ -769,6 +1194,7 @@ export default function BloodDonation() {
 																<label className="block text-xs font-medium text-pink-100/80 mb-1">End Date</label>
 																<input
 																	type="date"
+																	min={availabilitySchedule.startDate || new Date().toISOString().split("T")[0]}
 																	value={availabilitySchedule.endDate}
 																	onChange={(e) => setAvailabilitySchedule({ ...availabilitySchedule, endDate: e.target.value })}
 																	className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
@@ -778,6 +1204,7 @@ export default function BloodDonation() {
 																<label className="block text-xs font-medium text-pink-100/80 mb-1">Start Time</label>
 																<input
 																	type="time"
+																	min={availabilitySchedule.startDate === new Date().toISOString().split("T")[0] ? new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : undefined}
 																	value={availabilitySchedule.startTime}
 																	onChange={(e) => setAvailabilitySchedule({ ...availabilitySchedule, startTime: e.target.value })}
 																	className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
@@ -879,6 +1306,42 @@ export default function BloodDonation() {
 												{/* Health Status Form */}
 												{showHealthForm && (
 													<div className="mt-4 rounded-lg border border-[#F6D6E3]/20 bg-[#131326] p-4 space-y-4">
+														{/* Age and Weight Fields */}
+														<div className="grid gap-4 sm:grid-cols-2">
+															<div>
+																<label className="block text-xs font-medium text-pink-100/80 mb-1">
+																	Age (years) <span className="text-red-400">*</span>
+																</label>
+																<input
+																	type="number"
+																	value={healthStatus.age}
+																	onChange={(e) => setHealthStatus({ ...healthStatus, age: e.target.value })}
+																	min="1"
+																	max="120"
+																	className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
+																	placeholder="e.g., 25"
+																	required
+																/>
+																<p className="text-xs text-pink-100/50 mt-1">Must be at least 18 years old</p>
+															</div>
+															<div>
+																<label className="block text-xs font-medium text-pink-100/80 mb-1">
+																	Weight (kg) <span className="text-red-400">*</span>
+																</label>
+																<input
+																	type="number"
+																	step="0.1"
+																	value={healthStatus.weight}
+																	onChange={(e) => setHealthStatus({ ...healthStatus, weight: e.target.value })}
+																	min="1"
+																	max="300"
+																	className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
+																	placeholder="e.g., 65.5"
+																	required
+																/>
+																<p className="text-xs text-pink-100/50 mt-1">Must be more than 50 kg (110 lbs)</p>
+															</div>
+														</div>
 														<div>
 															<label className="flex items-center gap-2 text-sm font-medium text-white mb-3">
 																<input
@@ -1035,6 +1498,71 @@ export default function BloodDonation() {
 													</div>
 												)}
 
+												{/* Download Health Report Button */}
+												{healthAssessment && healthAssessment.canDonate && (
+													<div className="mt-4">
+														<button
+															type="button"
+															onClick={generateHealthReportPDF}
+															className="w-full rounded-lg bg-gradient-to-r from-[#E91E63] to-[#D81B60] px-6 py-3 text-sm font-bold text-white shadow-lg hover:shadow-xl hover:from-[#D81B60] hover:to-[#C2185B] transition-all flex items-center justify-center gap-2"
+														>
+															<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+															</svg>
+															Download Health Report PDF
+														</button>
+														<p className="mt-2 text-xs text-pink-100/60 text-center">
+															📋 Required for platelet donation requests
+														</p>
+													</div>
+												)}
+
+												{/* Upload Health Report Section */}
+												{healthAssessment?.canDonate && (
+													<div className="mt-6 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6">
+														<h4 className="flex items-center gap-2 text-sm font-semibold text-white mb-2">
+															<svg className="w-5 h-5 text-[#E91E63]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+															</svg>
+															Upload Verified Health Report
+														</h4>
+														<p className="text-xs text-pink-100/70 mb-4">
+															Please upload the PDF report you just downloaded. This verifies your eligibility for donation requests.
+														</p>
+
+														{healthReportUploaded ? (
+															<div className="flex items-center gap-3 rounded-lg bg-green-500/10 border border-green-500/30 p-3">
+																<div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-400">
+																	<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+																	</svg>
+																</div>
+																<div className="flex-1">
+																	<p className="text-sm font-semibold text-green-300">Report Uploaded Successfully</p>
+																	<p className="text-xs text-green-200/60">
+																		{localStorage.getItem(HEALTH_REPORT_FILENAME_KEY_BLOOD) || "health-report.pdf"}
+																	</p>
+																</div>
+															</div>
+														) : (
+															<div className="relative">
+																<input
+																	type="file"
+																	accept="application/pdf"
+																	onChange={handleHealthReportUpload}
+																	className="block w-full text-sm text-pink-100
+																		file:mr-4 file:py-2 file:px-4
+																		file:rounded-lg file:border-0
+																		file:text-sm file:font-semibold
+																		file:bg-[#E91E63] file:text-white
+																		hover:file:bg-[#D81B60]
+																		file:cursor-pointer cursor-pointer"
+																/>
+															</div>
+														)}
+													</div>
+												)}
+
 												{/* Medicine Suggestions */}
 												{medicineSuggestions.length > 0 && (
 													<div className="mt-4 rounded-lg border border-blue-500/40 bg-blue-500/10 p-4">
@@ -1173,180 +1701,291 @@ export default function BloodDonation() {
 								</div>
 							</div>
 
-							<div className="grid gap-6 md:grid-cols-2">
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<div className="flex items-center justify-between">
-										<h2 className="text-lg font-semibold text-white">My Donation Requests</h2>
-										<Link href="/donor/donate" legacyBehavior>
-											<a className="text-sm text-[#E91E63]">New Request</a>
-										</Link>
-									</div>
-									{donationRequests.length > 0 ? (
-										<ul className="mt-4 space-y-3">
-											{donationRequests.map((request) => {
-												const hospital = request.hospital || {}
-												const statusColors = {
-													PENDING: "bg-yellow-500/10 text-yellow-300 border-yellow-500/40",
-													ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/40",
-													REJECTED: "bg-red-500/10 text-red-300 border-red-500/40",
-													COMPLETED: "bg-blue-500/10 text-blue-300 border-blue-500/40",
-													CANCELLED: "bg-gray-500/10 text-gray-300 border-gray-500/40",
-												}
-												const statusLabels = {
-													PENDING: "Pending",
-													ACCEPTED: "Accepted",
-													REJECTED: "Rejected",
-													COMPLETED: "Completed",
-													CANCELLED: "Cancelled",
-												}
-												return (
-													<li key={request.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4">
-														<div className="flex items-center justify-between">
-															<div className="flex-1">
-																<p className="font-medium text-white">{hospital.name || "Hospital"}</p>
-																<p className="mt-1 text-xs text-pink-100/70">
-																	{hospital.city || ""} {hospital.phone ? `• ${hospital.phone}` : ""}
-																</p>
-															</div>
-															<span className={`rounded border px-2 py-1 text-xs font-semibold ${statusColors[request.status] || statusColors.PENDING}`}>
-																{statusLabels[request.status] || "Pending"}
-															</span>
+							<div className="grid gap-6 lg:grid-cols-3">
+								<div className="lg:col-span-2 space-y-6">
+									<div className="grid gap-6 md:grid-cols-2">
+										{/* My Donation Requests Column */}
+										<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+											<div className="flex items-center justify-between mb-4">
+												<h2 className="text-lg font-semibold text-white">My Donation Requests</h2>
+												<button
+													onClick={handleNewRequestClick}
+													className={`text-sm ${canRequestNewDonation ? "text-[#E91E63] hover:underline" : "text-gray-500 cursor-not-allowed"}`}
+												>
+													New Request
+												</button>
+											</div>
+
+											{!healthReportUploaded && (
+												<div className="mb-4 rounded-xl bg-yellow-500/5 border border-yellow-500/20 p-4">
+													<p className="text-[10px] font-bold text-yellow-300 mb-2 uppercase tracking-wider flex items-center gap-2">
+														<svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+														</svg>
+														New Health Report Required
+													</p>
+													<input
+														type="file"
+														accept="application/pdf"
+														onChange={handleHealthReportUpload}
+														className="block w-full text-[10px] text-pink-100/40
+															file:mr-3 file:py-1 file:px-3
+															file:rounded-md file:border-0
+															file:text-[10px] file:font-bold
+															file:bg-[#E91E63] file:text-white
+															hover:file:bg-[#E91E63]/90
+															file:cursor-pointer cursor-pointer"
+													/>
+												</div>
+											)}
+
+											{donationRequests.length > 0 ? (
+												<div className="space-y-4">
+													{/* Action Required / Updates */}
+													{donationRequests.filter(r => ["ACCEPTED", "ARRIVED", "REJECTED"].includes(r.status)).length > 0 && (
+														<div className="space-y-2">
+															<p className="text-[10px] font-bold text-[#E91E63] uppercase tracking-widest pl-1 mb-2">Response from Hospitals</p>
+															{donationRequests.filter(r => ["ACCEPTED", "ARRIVED", "REJECTED"].includes(r.status)).map((request) => {
+																const hospital = request.hospital || {}
+																const statusColors = {
+																	ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/20",
+																	ARRIVED: "bg-blue-500/10 text-blue-300 border-blue-500/20",
+																	REJECTED: "bg-red-500/10 text-red-300 border-red-500/20",
+																}
+																return (
+																	<div key={request.id} className="rounded-lg border border-[#E91E63]/20 bg-[#E91E63]/5 p-3 flex items-center justify-between gap-3 shadow-lg shadow-[#e91e6305]">
+																		<div className="flex-1 min-w-0">
+																			<div className="flex items-center gap-2">
+																				<p className="font-bold text-white text-xs truncate">{hospital.name || "Hospital"}</p>
+																				<span className={`px-1.5 py-0.5 rounded text-[8px] font-black border uppercase ${statusColors[request.status]}`}>
+																					{request.status}
+																				</span>
+																			</div>
+																			<p className="text-[9px] text-pink-100/40 mt-1">
+																				{request.status === "ACCEPTED" ? "Your request was accepted! Please visit the hospital." :
+																					request.status === "REJECTED" ? "Request rejected. Please check notes or try again." :
+																						"Arrival confirmed. Donation in progress..."}
+																			</p>
+																		</div>
+																		<div className="flex items-center gap-2">
+																			{request.status === "ACCEPTED" && (
+																				<button
+																					onClick={() => handleConfirmArrival(request.id)}
+																					className="rounded bg-[#E91E63] px-3 py-1 text-[9px] font-black text-white hover:opacity-90 transition shadow-md shadow-[#e91e6340] uppercase"
+																				>
+																					I HAVE REACHED 📍
+																				</button>
+																			)}
+																			{request.status === "REJECTED" && (
+																				<button
+																					onClick={() => {
+																						setSelectedRequest(request.id)
+																						setNewRequestOpen(true)
+																					}}
+																					className="rounded border border-[#E91E63] px-3 py-1 text-[9px] font-black text-[#E91E63] hover:bg-[#E91E63]/10 transition uppercase"
+																				>
+																					RESCHEDULE
+																				</button>
+																			)}
+																		</div>
+																	</div>
+																)
+															})}
 														</div>
-														{request.created_at && (
-															<p className="mt-2 text-xs text-pink-100/60">
-																Requested: {new Date(request.created_at).toLocaleDateString()}
-															</p>
-														)}
-														{request.status === "ACCEPTED" && (
-															<p className="mt-2 text-sm text-green-300">
-																✓ Your request has been accepted! The hospital will contact you soon.
-															</p>
-														)}
-														{request.status === "REJECTED" && (
-															<p className="mt-2 text-sm text-red-300">
-																✗ Your request was not accepted at this time.
-															</p>
-														)}
-													</li>
-												)
-											})}
-										</ul>
-									) : (
-										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
-											No donation requests yet.{" "}
-											<Link href="/donor/donate" legacyBehavior>
-												<a className="text-[#E91E63] underline">Request to donate at a center</a>
-											</Link>
+													)}
+
+													{/* Pending Requests */}
+													{donationRequests.filter(r => r.status === "PENDING").length > 0 && (
+														<div className="space-y-2">
+															<p className="text-[10px] font-bold text-pink-100/30 uppercase tracking-widest pl-1 mb-2">Pending Confirmation</p>
+															{donationRequests.filter(r => r.status === "PENDING").map((request) => {
+																const hospital = request.hospital || {}
+																return (
+																	<div key={request.id} className="rounded-lg border border-white/5 bg-white/5 p-3 flex items-center justify-between gap-3">
+																		<div className="flex-1 min-w-0">
+																			<p className="font-semibold text-white/80 text-xs truncate">{hospital.name || "Hospital"}</p>
+																			<p className="text-[10px] text-pink-100/30 italic">Awaiting hospital response...</p>
+																		</div>
+																		<span className="px-1.5 py-0.5 rounded text-[8px] font-bold border bg-yellow-500/5 text-yellow-500/50 border-yellow-500/10 uppercase">
+																			PENDING
+																		</span>
+																	</div>
+																)
+															})}
+														</div>
+													)}
+												</div>
+											) : (
+												<div className="rounded-xl border border-dashed border-white/10 p-8 text-center bg-white/[0.02]">
+													<div className="text-2xl mb-2 opacity-20">📋</div>
+													<p className="text-[10px] text-pink-100/40 uppercase font-black tracking-[0.2em]">No Active Requests</p>
+													<p className="text-[9px] text-pink-100/20 mt-1">Submit a new request to see it here.</p>
+												</div>
+											)}
 										</div>
-									)}
-								</div>
 
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<div className="flex items-center justify-between">
-										<h2 className="text-lg font-semibold text-white">Critical Matches Near You</h2>
-										<Link href="/needs" legacyBehavior>
-											<a className="text-sm text-[#E91E63]">View All</a>
-										</Link>
-									</div>
-									{recommendedNeeds.length ? (
-										<ul className="mt-4 space-y-3">
-											{recommendedNeeds.map((need) => {
-												const isUrgent = need.status === "URGENT"
-												const neededByDate = need.needed_by ? new Date(need.needed_by) : null
-												const daysUntilNeeded = neededByDate ? Math.ceil((neededByDate - new Date()) / (1000 * 60 * 60 * 24)) : null
-
-												return (
-													<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition">
-														<div className="flex items-start justify-between gap-3">
-															<div className="flex-1">
-																<div className="flex items-center gap-2 mb-2">
-																	<span className="font-medium text-white">{need.title || need.need_type || "Blood Need"}</span>
-																	<span className={`rounded px-2 py-1 text-xs font-semibold ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"
-																		}`}>
-																		{need.status || "NORMAL"}
-																	</span>
-																	<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
-																		{need.required_blood_group || "Any"}
+										{/* Critical Matches Column */}
+										<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+											<div className="flex items-center justify-between mb-4">
+												<h2 className="text-lg font-semibold text-white">Critical Matches Near You</h2>
+												<Link href="/needs" legacyBehavior>
+													<a className="text-sm text-[#E91E63]">View All</a>
+												</Link>
+											</div>
+											{recommendedNeeds.length ? (
+												<ul className="space-y-3">
+													{recommendedNeeds.slice(0, 3).map((need) => {
+														const isUrgent = need.status === "URGENT"
+														return (
+															<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition">
+																<div className="flex items-start justify-between gap-3">
+																	<div className="flex-1">
+																		<div className="flex items-center gap-2 mb-2">
+																			<span className="font-medium text-white text-sm">{need.title || need.need_type}</span>
+																			<span className={`rounded px-2 py-1 text-[10px] font-semibold ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
+																				{need.status || "NORMAL"}
+																			</span>
+																		</div>
+																		{need.hospital && (
+																			<p className="text-[10px] text-pink-100/70">
+																				Hospital: <span className="font-medium text-white">{need.hospital.name}</span>
+																			</p>
+																		)}
+																	</div>
+																	<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-[10px] font-bold text-[#E91E63]">
+																		{need.required_blood_group}
 																	</span>
 																</div>
-																{need.patient_name && (
-																	<p className="text-sm text-pink-100/80 mb-1">
-																		Patient: <span className="font-medium text-white">{need.patient_name}</span>
-																	</p>
-																)}
-																{need.patient_details && (
-																	<p className="mt-1 text-sm text-pink-100/70 line-clamp-2">{need.patient_details}</p>
-																)}
-																{need.hospital && (
-																	<p className="mt-2 text-sm text-pink-100/70">
-																		Hospital: <span className="font-medium text-white">{need.hospital.name}</span>
-																		{need.hospital.city && ` • ${need.hospital.city}`}
-																	</p>
-																)}
-																{need.quantity_needed && (
-																	<p className="mt-1 text-sm text-pink-100/70">
-																		Quantity Needed: <span className="font-medium text-white">{need.quantity_needed} units</span>
-																	</p>
-																)}
-																{neededByDate && (
-																	<p className={`mt-1 text-sm font-medium ${daysUntilNeeded !== null && daysUntilNeeded <= 1 ? "text-red-300" :
-																		daysUntilNeeded !== null && daysUntilNeeded <= 3 ? "text-yellow-300" : "text-pink-100/70"
-																		}`}>
-																		Needed by: {neededByDate.toLocaleDateString()} {neededByDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-																		{daysUntilNeeded !== null && daysUntilNeeded >= 0 && (
-																			<span className="ml-2">
-																				({daysUntilNeeded === 0 ? "Today" : daysUntilNeeded === 1 ? "Tomorrow" : `${daysUntilNeeded} days`})
-																			</span>
-																		)}
-																	</p>
-																)}
-																{need.poster_image && (
-																	<div className="mt-3">
-																		<img
-																			src={need.poster_image}
-																			alt="Patient poster"
-																			className="max-w-xs rounded-lg border border-[#F6D6E3]/20"
-																			onError={(e) => { e.target.style.display = 'none' }}
-																		/>
-																	</div>
-																)}
-															</div>
-														</div>
-													</li>
-												)
-											})}
-										</ul>
-									) : (
-										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
-											No matched requests at the moment. We will notify you when a compatible patient is added.
+															</li>
+														)
+													})}
+												</ul>
+											) : (
+												<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
+													No matched requests at the moment.
+												</div>
+											)}
 										</div>
-									)}
+									</div>
+
+									<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+										<div className="flex items-center justify-between">
+											<h2 className="text-lg font-semibold text-white">Donation History</h2>
+											<Link href="#" legacyBehavior>
+												<a className="text-sm text-[#E91E63]">Export</a>
+											</Link>
+										</div>
+										{donationHistory.length ? (
+											<ul className="mt-4 space-y-3">
+												{donationHistory.map((entry) => (
+													<li key={entry.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 relative overflow-hidden group">
+														{entry.star_reward && (
+															<div className="absolute top-0 right-0 bg-yellow-500 text-black text-[10px] font-black px-3 py-1 rounded-bl-lg shadow-md transform translate-x-1 -translate-y-1 group-hover:translate-x-0 group-hover:translate-y-0 transition-transform">
+																★ STAR REWARD
+															</div>
+														)}
+														<div className="flex items-center justify-between text-sm text-pink-100/80 mb-2">
+															<span className="font-bold">{new Date(entry.visit_date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+															<span className="bg-[#E91E63]/20 text-[#E91E63] px-2 py-0.5 rounded text-xs font-bold">BLOOD</span>
+														</div>
+														<p className="text-sm text-white font-medium">Hospital: {entry.hospital?.name || "Unknown Hospital"}</p>
+
+														{entry.rewards && (
+															<div className="mt-3 p-2.5 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
+																<p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-1">Rewards Granted</p>
+																<p className="text-sm text-yellow-100/90">{entry.rewards}</p>
+															</div>
+														)}
+
+														{entry.fruity_given && (
+															<div className="mt-2 flex items-center gap-2 text-xs text-green-300 font-bold bg-green-500/10 w-fit px-2 py-1 rounded border border-green-500/20">
+																<span>🍊</span> Fruity Given
+															</div>
+														)}
+													</li>
+												))}
+											</ul>
+										) : (
+											<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
+												You have not recorded any donations yet. Confirmed donations will appear here once verified.
+											</div>
+										)}
+									</div>
 								</div>
 
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<div className="flex items-center justify-between">
-										<h2 className="text-lg font-semibold text-white">Donation History</h2>
-										<Link href="#" legacyBehavior>
-											<a className="text-sm text-[#E91E63]">Export</a>
-										</Link>
-									</div>
-									{DONATION_HISTORY_PLACEHOLDER.length ? (
-										<ul className="mt-4 space-y-3">
-											{DONATION_HISTORY_PLACEHOLDER.map((entry) => (
-												<li key={entry.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4">
-													<div className="flex items-center justify-between text-sm text-pink-100/80">
-														<span>{entry.date}</span>
-														<span>{entry.type}</span>
-													</div>
-													<p className="mt-1 text-sm text-pink-100/70">Recipient: {entry.recipient}</p>
-												</li>
-											))}
-										</ul>
-									) : (
-										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
-											You have not recorded any donations yet. Confirmed donations will appear here once verified.
+								<div className="space-y-6">
+									{/* Rewards & Earnings Box */}
+									<div className="rounded-2xl border border-yellow-500/40 bg-gradient-to-br from-[#131326] to-[#1A1A2E] p-6 shadow-xl shadow-yellow-500/5">
+										<div className="flex items-center gap-3 mb-6">
+											<div className="h-10 w-10 rounded-full bg-yellow-500/20 flex items-center justify-center text-xl">💰</div>
+											<h2 className="text-lg font-bold text-white">Your Wallet</h2>
 										</div>
-									)}
+										<div className="space-y-4">
+											<div className="p-4 rounded-xl bg-white/5 border border-white/10">
+												<p className="text-xs text-pink-100/60 uppercase font-black tracking-widest">Total Earnings Received</p>
+												<p className="mt-1 text-3xl font-black text-white">Rs {displayDonor?.total_money_earned || "0.00"}</p>
+											</div>
+											<p className="text-xs text-pink-100/50 leading-relaxed italic">
+												* Earned by reaching 50-star milestones. This amount is automatically credited to your LifeSaver wallet.
+											</p>
+										</div>
+									</div>
+
+									{/* Coupons Box */}
+									<div className="rounded-2xl border border-blue-500/40 bg-gradient-to-br from-[#131326] to-[#1A1A2E] p-6 shadow-xl shadow-blue-500/5">
+										<div className="flex items-center gap-3 mb-6">
+											<div className="h-10 w-10 rounded-full bg-blue-500/20 flex items-center justify-center text-xl">🎟️</div>
+											<h2 className="text-lg font-bold text-white">Medical Coupons</h2>
+										</div>
+										{coupons.length > 0 ? (
+											<div className="space-y-3">
+												{coupons.map((coupon) => (
+													<div key={coupon.id} className="relative p-4 rounded-xl border-2 border-dashed border-blue-500/30 bg-blue-500/5 overflow-hidden">
+														<div className="relative z-10">
+															<div className="flex justify-between items-start mb-2">
+																<span className="text-xl font-black text-white">{coupon.discount_percentage}% OFF</span>
+																<span className="text-[10px] font-bold text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">VALID</span>
+															</div>
+															<p className="text-xs text-pink-100/70 mb-3">Redeemable at partner medical stores.</p>
+															<div className="flex items-center justify-between gap-2 p-2 rounded bg-black/40 border border-white/10">
+																<span className="text-sm font-mono font-bold text-blue-300 tracking-wider uppercase">{coupon.code}</span>
+																<button
+																	onClick={() => {
+																		navigator.clipboard.writeText(coupon.code)
+																		alert("Coupon code copied!")
+																	}}
+																	className="text-[10px] font-black text-white hover:text-blue-300 transition uppercase"
+																>
+																	Copy
+																</button>
+															</div>
+														</div>
+														<div className="absolute top-1/2 -right-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
+														<div className="absolute top-1/2 -left-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
+													</div>
+												))}
+											</div>
+										) : (
+											<div className="text-center py-8 px-4 rounded-xl border border-dashed border-white/10 bg-white/5">
+												<p className="text-xs text-pink-100/50">No coupons yet. Complete 50 stars to generate your first 20% discount coupon!</p>
+											</div>
+										)}
+									</div>
+
+									{/* Blood Compatibility Guide Reference - Moved to Sidebar */}
+									<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+										<p className="text-[10px] uppercase tracking-widest text-[#E91E63] font-black mb-4">Official Reference</p>
+										<div className="rounded-xl overflow-hidden border-2 border-[#F6D6E3]/30 bg-[#1A1A2E]">
+											<img
+												src="/images/blood-compatibility-chart.png"
+												alt="Compatibility Chart"
+												className="w-full h-auto"
+											/>
+										</div>
+										<p className="mt-4 text-xs text-pink-100/60 leading-relaxed">
+											* Medically verified compatibility chart for simplified donor-recipient matching.
+										</p>
+									</div>
 								</div>
 							</div>
 
@@ -1573,6 +2212,28 @@ export default function BloodDonation() {
 					)}
 				</section>
 			</main>
+
+			{showEligibilityPopup && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+					<div className="w-full max-w-md rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-6 shadow-2xl">
+						<div className="mb-4 flex items-center gap-3 text-rose-400">
+							<svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+							</svg>
+							<h3 className="text-lg font-bold text-white">Action Required</h3>
+						</div>
+						<p className="mb-6 text-sm leading-relaxed text-pink-100/80">
+							{eligibilityMessage}
+						</p>
+						<button
+							onClick={() => setShowEligibilityPopup(false)}
+							className="w-full rounded-lg bg-[#E91E63] py-2.5 text-sm font-semibold text-white transition hover:bg-[#D81B60]"
+						>
+							Understood
+						</button>
+					</div>
+				</div>
+			)}
 		</>
 	)
 }

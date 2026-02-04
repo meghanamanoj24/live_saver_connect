@@ -10,10 +10,10 @@ export default function HospitalDashboard() {
 	const [hospital, setHospital] = useState(null)
 	const [activeTab, setActiveTab] = useState("requests")
 	const [loading, setLoading] = useState(true)
-	
+
 	// Donation Requests
 	const [donationRequests, setDonationRequests] = useState([])
-	
+
 	// Hospital Needs
 	const [hospitalNeeds, setHospitalNeeds] = useState([])
 	const [showNeedForm, setShowNeedForm] = useState(false)
@@ -28,7 +28,7 @@ export default function HospitalDashboard() {
 		needed_by: "",
 		notes: "",
 	})
-	
+
 	// Doctors
 	const [doctors, setDoctors] = useState([])
 	const [showDoctorForm, setShowDoctorForm] = useState(false)
@@ -39,19 +39,28 @@ export default function HospitalDashboard() {
 		phone: "",
 		email: "",
 	})
-	
+
 	// Appointments
 	const [appointments, setAppointments] = useState([])
-	
+
 	// Willing Donors
 	const [willingDonors, setWillingDonors] = useState([])
 	const [organDonors, setOrganDonors] = useState([])
 	// Events
 	const [events, setEvents] = useState([])
-	
+
 	// Location Search
 	const [locationSearch, setLocationSearch] = useState({ city: "", latitude: "", longitude: "" })
 	const [nearbyHospitals, setNearbyHospitals] = useState([])
+
+	// Accept Request Modal State
+	const [acceptModal, setAcceptModal] = useState({
+		isOpen: false,
+		requestId: null,
+		scheduledDate: "",
+		patientName: "", // Added patientName
+		notes: ""
+	})
 
 	useEffect(() => {
 		if (id) {
@@ -70,7 +79,7 @@ export default function HospitalDashboard() {
 				hospitalData = await apiFetch(`/hospitals/${id}/`)
 			}
 			setHospital(hospitalData)
-			
+
 			// Load all related data
 			await Promise.all([
 				loadDonationRequests(hospitalData.id),
@@ -89,10 +98,10 @@ export default function HospitalDashboard() {
 				if (stored) {
 					const hospitalFromStorage = JSON.parse(stored)
 					setHospital(hospitalFromStorage)
-					
+
 					// Use the stored hospital ID or the URL ID
 					const hospitalId = hospitalFromStorage.id || id
-					
+
 					// Load all related data with the correct ID
 					await Promise.all([
 						loadDonationRequests(hospitalId),
@@ -118,16 +127,16 @@ export default function HospitalDashboard() {
 	async function loadDonationRequests(hospitalId) {
 		// Normalize hospitalId to string for comparison
 		const normalizedHospitalId = hospitalId ? String(hospitalId) : null
-		
+
 		if (!normalizedHospitalId) {
 			setDonationRequests([])
 			return
 		}
-		
+
 		try {
 			const data = await apiFetch(`/donation-requests/?hospital=${normalizedHospitalId}`)
 			setDonationRequests(data)
-			
+
 			// Also sync to localStorage
 			if (typeof window !== "undefined") {
 				const hospitalStorageKey = `lifesaver:hospital_${normalizedHospitalId}_requests`
@@ -151,34 +160,34 @@ export default function HospitalDashboard() {
 						// Continue to general storage
 					}
 				}
-				
+
 				// Check general donation requests storage
 				const stored = localStorage.getItem("lifesaver:donation_requests")
 				if (stored) {
 					try {
 						const allRequests = JSON.parse(stored)
 						console.log("All requests in storage:", allRequests.length)
-						
+
 						// Filter by hospital ID (compare as strings)
 						const filtered = allRequests.filter(r => {
 							const requestHospitalId = r.hospital?.id ? String(r.hospital.id) : null
 							const requestHospitalId2 = r.hospital_id ? String(r.hospital_id) : null
-							
-							const matches = 
-								requestHospitalId === normalizedHospitalId || 
+
+							const matches =
+								requestHospitalId === normalizedHospitalId ||
 								requestHospitalId2 === normalizedHospitalId ||
 								(r.hospital && String(r.hospital.id) === normalizedHospitalId)
-							
+
 							if (matches) {
 								console.log("Matched request:", r.id, "for hospital:", normalizedHospitalId)
 							}
-							
+
 							return matches
 						})
-						
+
 						console.log("Filtered requests for hospital:", filtered.length)
 						setDonationRequests(filtered)
-						
+
 						// Also update hospital-specific storage
 						if (filtered.length > 0) {
 							localStorage.setItem(hospitalStorageKey, JSON.stringify(filtered))
@@ -249,63 +258,76 @@ export default function HospitalDashboard() {
 		}
 	}
 
-	async function handleAcceptRequest(requestId) {
+	function handleAcceptRequest(requestId) {
+		setAcceptModal({
+			isOpen: true,
+			requestId: requestId,
+			scheduledDate: "",
+			patientName: "",
+			notes: ""
+		})
+	}
+
+	async function confirmAcceptRequest() {
+		if (!acceptModal.scheduledDate) {
+			alert("Please select a valid date/time for the donation.")
+			return
+		}
+
 		try {
-			await apiFetch(`/donation-requests/${requestId}/accept/`, {
+			const formattedDate = new Date(acceptModal.scheduledDate).toISOString()
+
+			await apiFetch(`/donation-requests/${acceptModal.requestId}/accept/`, {
 				method: "POST",
-				body: JSON.stringify({ notes: "" }),
+				body: JSON.stringify({
+					notes: acceptModal.notes,
+					scheduled_date: formattedDate,
+					patient_name: acceptModal.patientName // Send patient name
+				}),
 			})
-			
+
 			// Update in all localStorage locations
 			if (typeof window !== "undefined") {
 				// Update general storage
 				const stored = localStorage.getItem("lifesaver:donation_requests")
 				if (stored) {
 					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map(r => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
+					const updated = allRequests.map(r =>
+						r.id === acceptModal.requestId ? {
+							...r,
+							status: "ACCEPTED",
+							updated_at: new Date().toISOString(),
+							scheduled_date: formattedDate,
+							patient_name: acceptModal.patientName
+						} : r
 					)
 					localStorage.setItem("lifesaver:donation_requests", JSON.stringify(updated))
 				}
-				
+
 				// Update hospital-specific storage
 				const hospitalStorageKey = `lifesaver:hospital_${hospital.id}_requests`
 				const hospitalStored = localStorage.getItem(hospitalStorageKey)
 				if (hospitalStored) {
 					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map(r => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
+					const updated = hospitalRequests.map(r =>
+						r.id === acceptModal.requestId ? {
+							...r,
+							status: "ACCEPTED",
+							updated_at: new Date().toISOString(),
+							scheduled_date: formattedDate,
+							patient_name: acceptModal.patientName
+						} : r
 					)
 					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
 				}
 			}
-			
+
 			loadDonationRequests(hospital.id)
+			setAcceptModal({ isOpen: false, requestId: null, scheduledDate: "", patientName: "", notes: "" })
+			alert("Request accepted and scheduled successfully!")
 		} catch (error) {
-			// Fallback: Update in localStorage
-			if (typeof window !== "undefined") {
-				// Update general storage
-				const stored = localStorage.getItem("lifesaver:donation_requests")
-				if (stored) {
-					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map(r => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem("lifesaver:donation_requests", JSON.stringify(updated))
-				}
-				
-				// Update hospital-specific storage
-				const hospitalStorageKey = `lifesaver:hospital_${hospital.id}_requests`
-				const hospitalStored = localStorage.getItem(hospitalStorageKey)
-				if (hospitalStored) {
-					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map(r => 
-						r.id === requestId ? { ...r, status: "ACCEPTED", updated_at: new Date().toISOString() } : r
-					)
-					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
-				}
-			}
-			loadDonationRequests(hospital.id)
+			console.error("Error accepting request:", error)
+			alert("Failed to accept request. Please try again.")
 		}
 	}
 
@@ -315,57 +337,89 @@ export default function HospitalDashboard() {
 				method: "POST",
 				body: JSON.stringify({ notes: "" }),
 			})
-			
+
 			// Update in all localStorage locations
 			if (typeof window !== "undefined") {
 				// Update general storage
 				const stored = localStorage.getItem("lifesaver:donation_requests")
 				if (stored) {
 					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map(r => 
+					const updated = allRequests.map(r =>
 						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
 					)
 					localStorage.setItem("lifesaver:donation_requests", JSON.stringify(updated))
 				}
-				
+
 				// Update hospital-specific storage
 				const hospitalStorageKey = `lifesaver:hospital_${hospital.id}_requests`
 				const hospitalStored = localStorage.getItem(hospitalStorageKey)
 				if (hospitalStored) {
 					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map(r => 
+					const updated = hospitalRequests.map(r =>
 						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
 					)
 					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
 				}
 			}
-			
+
 			loadDonationRequests(hospital.id)
+			alert("Request rejected.")
 		} catch (error) {
+			console.error("Error rejecting request:", error)
 			// Fallback: Update in localStorage
 			if (typeof window !== "undefined") {
 				// Update general storage
 				const stored = localStorage.getItem("lifesaver:donation_requests")
 				if (stored) {
 					const allRequests = JSON.parse(stored)
-					const updated = allRequests.map(r => 
+					const updated = allRequests.map(r =>
 						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
 					)
 					localStorage.setItem("lifesaver:donation_requests", JSON.stringify(updated))
 				}
-				
+
 				// Update hospital-specific storage
 				const hospitalStorageKey = `lifesaver:hospital_${hospital.id}_requests`
 				const hospitalStored = localStorage.getItem(hospitalStorageKey)
 				if (hospitalStored) {
 					const hospitalRequests = JSON.parse(hospitalStored)
-					const updated = hospitalRequests.map(r => 
+					const updated = hospitalRequests.map(r =>
 						r.id === requestId ? { ...r, status: "REJECTED", updated_at: new Date().toISOString() } : r
 					)
 					localStorage.setItem(hospitalStorageKey, JSON.stringify(updated))
 				}
 			}
 			loadDonationRequests(hospital.id)
+		}
+	}
+
+	async function handleDeleteRequest(requestId) {
+		if (!confirm("Are you sure you want to delete this request? This action cannot be undone.")) return
+
+		try {
+			await apiFetch(`/donation-requests/${requestId}/`, {
+				method: "DELETE",
+			})
+
+			// Update local storage to remove the item
+			if (typeof window !== "undefined") {
+				const updateStorage = (key) => {
+					const stored = localStorage.getItem(key)
+					if (stored) {
+						const requests = JSON.parse(stored)
+						const updated = requests.filter(r => r.id !== requestId)
+						localStorage.setItem(key, JSON.stringify(updated))
+					}
+				}
+				updateStorage("lifesaver:donation_requests")
+				updateStorage(`lifesaver:hospital_${hospital.id}_requests`)
+			}
+
+			loadDonationRequests(hospital.id)
+			alert("Request deleted successfully.")
+		} catch (error) {
+			console.error("Error deleting request:", error)
+			alert("Failed to delete request.")
 		}
 	}
 
@@ -437,10 +491,10 @@ export default function HospitalDashboard() {
 		e.preventDefault()
 		try {
 			// Format datetime for API
-			const eventDateTime = eventForm.event_date && eventForm.start_time 
-				? `${eventForm.event_date}T${eventForm.start_time}` 
+			const eventDateTime = eventForm.event_date && eventForm.start_time
+				? `${eventForm.event_date}T${eventForm.start_time}`
 				: null
-			
+
 			const response = await apiFetch("/blood-donation-events/", {
 				method: "POST",
 				body: JSON.stringify({
@@ -614,7 +668,7 @@ export default function HospitalDashboard() {
 									</button>
 								</div>
 							</div>
-							
+
 							{/* Show all requests, not just pending */}
 							{donationRequests.length > 0 ? (
 								<div className="space-y-4">
@@ -628,7 +682,7 @@ export default function HospitalDashboard() {
 											CANCELLED: "bg-gray-600/20 text-gray-400",
 										}
 										const statusColor = statusColors[request.status] || "bg-gray-600/20 text-gray-400"
-										
+
 										return (
 											<div key={request.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
 												<div className="flex items-start justify-between">
@@ -640,12 +694,27 @@ export default function HospitalDashboard() {
 															<span className={`rounded-full px-2 py-1 text-xs font-medium ${statusColor}`}>
 																{request.status || "PENDING"}
 															</span>
+															<span className="rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold uppercase">
+																{request.request_type || "BLOOD"}
+															</span>
 														</div>
 														<p className="mt-1 text-sm text-pink-100/70">Email: {donor.email || "Not provided"}</p>
 														{request.message && <p className="mt-2 text-sm text-pink-100/80">{request.message}</p>}
 														<p className="mt-2 text-xs text-pink-100/60">
 															Requested: {new Date(request.created_at || Date.now()).toLocaleString()}
 														</p>
+														{request.scheduled_date && (
+															<p className="mt-1 text-sm font-semibold text-green-400">
+																Scheduled: {new Date(request.scheduled_date).toLocaleString(undefined, {
+																	weekday: 'short',
+																	year: 'numeric',
+																	month: 'short',
+																	day: 'numeric',
+																	hour: '2-digit',
+																	minute: '2-digit'
+																})}
+															</p>
+														)}
 													</div>
 													{request.status === "PENDING" && (
 														<div className="flex gap-2 ml-4">
@@ -653,13 +722,23 @@ export default function HospitalDashboard() {
 																onClick={() => handleAcceptRequest(request.id)}
 																className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700"
 															>
-																Accept
+																Arrived
 															</button>
 															<button
 																onClick={() => handleRejectRequest(request.id)}
 																className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
 															>
 																Reject
+															</button>
+														</div>
+													)}
+													{request.status === "ACCEPTED" && (
+														<div className="flex gap-2 ml-4">
+															<button
+																onClick={() => handleDeleteRequest(request.id)}
+																className="rounded-lg border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-400 transition hover:bg-red-500/10"
+															>
+																Delete
 															</button>
 														</div>
 													)}
@@ -674,6 +753,68 @@ export default function HospitalDashboard() {
 									<p className="text-xs text-pink-100/50 mt-2">Make sure requests are being sent to this hospital (ID: {hospital?.id || id})</p>
 								</div>
 							)}
+						</div>
+					)}
+
+					{/* Accept Request Modal - Rendered outside the list but conditionally */}
+					{acceptModal.isOpen && (
+						<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+							<div className="w-full max-w-md rounded-2xl border border-[#F6D6E3]/30 bg-[#131326] p-6 shadow-xl">
+								<h3 className="text-xl font-bold text-white mb-4">Accept Request & Schedule</h3>
+								<p className="text-sm text-pink-100/70 mb-4">
+									Please set a schedule date and time for when the donor should come for the donation.
+								</p>
+
+								<div className="space-y-4">
+									<div>
+										<label className="block text-sm font-medium text-pink-100 mb-1">Scheduled Date & Time *</label>
+										<input
+											type="datetime-local"
+											value={acceptModal.scheduledDate}
+											onChange={(e) => setAcceptModal({ ...acceptModal, scheduledDate: e.target.value })}
+											className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+											required
+										/>
+									</div>
+
+									<div>
+										<label className="block text-sm font-medium text-pink-100 mb-1">Patient Name (Optional)</label>
+										<input
+											type="text"
+											value={acceptModal.patientName}
+											onChange={(e) => setAcceptModal({ ...acceptModal, patientName: e.target.value })}
+											className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+											placeholder="Name of the patient involved"
+										/>
+									</div>
+
+									<div>
+										<label className="block text-sm font-medium text-pink-100 mb-1">Notes (Optional)</label>
+										<textarea
+											value={acceptModal.notes}
+											onChange={(e) => setAcceptModal({ ...acceptModal, notes: e.target.value })}
+											className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+											rows={3}
+											placeholder="Any instructions for the donor..."
+										/>
+									</div>
+
+									<div className="flex gap-3 pt-2">
+										<button
+											onClick={() => setAcceptModal({ isOpen: false, requestId: null, scheduledDate: "", patientName: "", notes: "" })}
+											className="flex-1 rounded-lg border border-[#F6D6E3]/30 bg-transparent py-2.5 text-sm font-semibold text-pink-100 transition hover:bg-white/5"
+										>
+											Cancel
+										</button>
+										<button
+											onClick={confirmAcceptRequest}
+											className="flex-1 rounded-lg bg-[#E91E63] py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-[#d81b60]"
+										>
+											Confirm Schedule
+										</button>
+									</div>
+								</div>
+							</div>
 						</div>
 					)}
 
@@ -795,9 +936,8 @@ export default function HospitalDashboard() {
 															{need.required_blood_group}
 														</span>
 													)}
-													<span className={`rounded px-2 py-1 text-xs font-semibold ${
-														need.status === "URGENT" ? "bg-red-500/10 text-red-300" : "bg-yellow-500/10 text-yellow-300"
-													}`}>
+													<span className={`rounded px-2 py-1 text-xs font-semibold ${need.status === "URGENT" ? "bg-red-500/10 text-red-300" : "bg-yellow-500/10 text-yellow-300"
+														}`}>
 														{need.status}
 													</span>
 												</div>
@@ -950,7 +1090,7 @@ export default function HospitalDashboard() {
 					{activeTab === "donors" && (
 						<div className="space-y-6">
 							<h2 className="text-2xl font-bold text-white">Willing Donors</h2>
-							
+
 							{/* Blood Donors */}
 							<div>
 								<h3 className="text-xl font-semibold text-white mb-4">Blood Donors</h3>
@@ -1002,7 +1142,7 @@ export default function HospitalDashboard() {
 					{activeTab === "location" && (
 						<div className="space-y-6">
 							<h2 className="text-2xl font-bold text-white">Find Nearby Hospitals & Centers</h2>
-							
+
 							<div className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6 space-y-4">
 								<div className="grid gap-4 md:grid-cols-3">
 									<div>
@@ -1075,7 +1215,7 @@ export default function HospitalDashboard() {
 						</div>
 					)}
 				</div>
-			</main>
+			</main >
 		</>
 	)
 }

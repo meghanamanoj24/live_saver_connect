@@ -90,6 +90,8 @@ export default function HospitalRegister() {
 						password: formData.password,
 						first_name: formData.firstName,
 						last_name: formData.lastName,
+						phone: formData.phone,
+						donor_module: "hospital"
 					}),
 				})
 			} catch (err) {
@@ -105,6 +107,7 @@ export default function HospitalRegister() {
 				zip_code: formData.zipCode,
 				address: formData.address,
 				phone: formData.phone,
+				email: formData.email,
 				website: formData.website,
 				latitude: formData.latitude ? parseFloat(formData.latitude) : null,
 				longitude: formData.longitude ? parseFloat(formData.longitude) : null,

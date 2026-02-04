@@ -71,7 +71,7 @@ export default function HospitalAppointments() {
 			await loadAppointments(hospital?.id || id)
 			alert("Appointment approved successfully!")
 		} catch (error) {
-			alert("Error approving appointment. Please try again.")
+			alert(error.message || "Error approving appointment. Please try again.")
 		} finally {
 			setActionLoading(null)
 		}
@@ -87,7 +87,7 @@ export default function HospitalAppointments() {
 			await loadAppointments(hospital?.id || id)
 			alert("Appointment rejected.")
 		} catch (error) {
-			alert("Error rejecting appointment. Please try again.")
+			alert(error.message || "Error rejecting appointment. Please try again.")
 		} finally {
 			setActionLoading(null)
 		}

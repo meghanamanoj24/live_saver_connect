@@ -898,6 +898,59 @@ export default function DonorDashboard() {
 						</div>
 					</div>
 
+					{/* Recent Activity / Requests Section */}
+					<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+						<div className="flex items-center justify-between mb-4">
+							<h2 className="text-lg font-semibold text-white">Recent Donation Requests</h2>
+							<Link href="/donor/blood" legacyBehavior>
+								<a className="text-sm text-[#E91E63]">View All History</a>
+							</Link>
+						</div>
+
+						{donationRequests.length > 0 ? (
+							<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+								{donationRequests.slice(0, 3).map((request) => {
+									const hospital = request.hospital || {}
+									const statusColors = {
+										PENDING: "bg-yellow-500/10 text-yellow-300 border-yellow-500/40",
+										ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/40",
+										REJECTED: "bg-red-500/10 text-red-300 border-red-500/40",
+										COMPLETED: "bg-blue-500/10 text-blue-300 border-blue-500/40",
+									}
+									return (
+										<div key={request.id} className="rounded-xl border border-[#F6D6E3]/20 bg-[#1A1A2E] p-4 flex flex-col justify-between">
+											<div>
+												<div className="flex items-center justify-between mb-1">
+													<p className="font-bold text-white truncate mr-2">{hospital.name || "Hospital"}</p>
+													<span className={`rounded px-2 py-0.5 text-[10px] font-black uppercase border ${statusColors[request.status] || statusColors.PENDING}`}>
+														{request.status || "PENDING"}
+													</span>
+												</div>
+												<div className="flex items-center gap-2 mb-2">
+													<span className="text-[10px] font-black uppercase text-[#E91E63]/80 bg-[#E91E63]/10 px-1.5 py-0.5 rounded border border-[#E91E63]/20">
+														{request.request_type || "BLOOD"}
+													</span>
+													<p className="text-[10px] text-pink-100/40">
+														{new Date(request.created_at).toLocaleDateString()}
+													</p>
+												</div>
+											</div>
+											<Link href={`/donor/${(request.request_type || "BLOOD").toLowerCase()}`} legacyBehavior>
+												<a className="text-[10px] text-[#4e7fff] font-bold uppercase tracking-widest hover:underline">
+													View Details →
+												</a>
+											</Link>
+										</div>
+									)
+								})}
+							</div>
+						) : (
+							<div className="rounded-xl border border-dashed border-[#F6D6E3]/20 p-6 text-center text-sm text-pink-100/50">
+								No recent requests found. All updates will appear here.
+							</div>
+						)}
+					</div>
+
 					{/* Quick status pies */}
 					<div className="grid gap-4 md:grid-cols-3">
 						{quickStatusItems.map((item) => (
@@ -960,8 +1013,7 @@ export default function DonorDashboard() {
 						</Link>
 					</div>
 				</footer>
-			</main>
+			</main >
 		</>
 	)
 }
-

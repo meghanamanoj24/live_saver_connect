@@ -19,7 +19,7 @@ export default function DonorDonate() {
 		async function loadHospitals() {
 			setLoadingHospitals(true)
 			const allHospitals = []
-			
+
 			try {
 				// Fetch only hospitals that are registered and have user accounts from API
 				const data = await apiFetch("/hospitals/?registered_only=true")
@@ -36,7 +36,7 @@ export default function DonorDonate() {
 					console.warn("API fetch failed, checking localStorage")
 				}
 			}
-			
+
 			// Also check localStorage for registered hospitals (from hospital module registration)
 			if (typeof window !== "undefined") {
 				try {
@@ -64,7 +64,7 @@ export default function DonorDonate() {
 							})
 						}
 					}
-					
+
 					// Check for registered hospitals list
 					const registeredList = localStorage.getItem(REGISTERED_HOSPITALS_STORAGE_KEY)
 					if (registeredList) {
@@ -84,7 +84,7 @@ export default function DonorDonate() {
 					console.warn("Error reading hospitals from localStorage:", e)
 				}
 			}
-			
+
 			setHospitals(allHospitals)
 			setLoadingHospitals(false)
 		}
@@ -101,31 +101,50 @@ export default function DonorDonate() {
 		setMessage("")
 		try {
 			const selectedHospital = hospitals.find((h) => h.id.toString() === selectedOrg.toString())
-			
+
 			if (!selectedHospital) {
 				setMessage("Please select a valid hospital or center.")
 				setLoading(false)
 				return
 			}
-			
+
 			// Get current user info for the request
 			const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null
 			const userData = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("userData") || "{}") : {}
-			
+
+			let user_id = null
+			// Try to get user ID from token if available (optional)
+			if (token) {
+				try {
+					const payload = JSON.parse(atob(token.split(".")[1]))
+					if (payload.user_id) {
+						user_id = payload.user_id
+					}
+				} catch (e) {
+					// Token parsing failed, continue without user_id
+					console.log("Could not parse token, reporting as anonymous")
+				}
+			}
+
+			// Get type from query params
+			const urlParams = new URLSearchParams(window.location.search)
+			const requestType = urlParams.get("type") || "BLOOD"
+
 			// Try to create donation request via API
 			try {
 				const requestData = {
 					hospital_id: selectedHospital.id,
-					donor_id: userData.id || 1, // Will be set by backend if authenticated
-					message: `Donation request from donor to ${selectedHospital.name}`,
+					donor_id: user_id || 1, // Will be set by backend if authenticated
+					request_type: requestType,
+					message: `${requestType.charAt(0) + requestType.slice(1).toLowerCase()} donation request from donor to ${selectedHospital.name}`,
 					status: "PENDING",
 				}
-				
+
 				const response = await apiFetch("/donation-requests/", {
 					method: "POST",
 					body: JSON.stringify(requestData),
 				})
-				
+
 				// Store in localStorage for tracking (with full hospital info)
 				if (typeof window !== "undefined") {
 					const existing = JSON.parse(localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY) || "[]")
@@ -134,20 +153,21 @@ export default function DonorDonate() {
 						hospital: selectedHospital,
 						hospital_id: selectedHospital.id,
 						donor: userData,
+						request_type: requestType,
 						status: "PENDING",
 						message: requestData.message,
 						created_at: new Date().toISOString(),
 					}
 					existing.push(newRequest)
 					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(existing))
-					
+
 					// Also notify hospital's localStorage if it exists
 					const hospitalStorageKey = `lifesaver:hospital_${selectedHospital.id}_requests`
 					const hospitalRequests = JSON.parse(localStorage.getItem(hospitalStorageKey) || "[]")
-					hospitalRequests.push(newRequest)
+					hospitalRequests.push({ ...newRequest, notes: "" })
 					localStorage.setItem(hospitalStorageKey, JSON.stringify(hospitalRequests))
 				}
-				
+
 				setMessage("Request sent! The organisation will contact you with scheduling instructions.")
 				setSelectedOrg("") // Reset selection
 			} catch (apiError) {
@@ -165,7 +185,7 @@ export default function DonorDonate() {
 					}
 					existing.push(newRequest)
 					localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(existing))
-					
+
 					// Also notify hospital's localStorage
 					const hospitalStorageKey = `lifesaver:hospital_${selectedHospital.id}_requests`
 					const hospitalRequests = JSON.parse(localStorage.getItem(hospitalStorageKey) || "[]")
@@ -223,121 +243,120 @@ export default function DonorDonate() {
 							) : (
 								<div className="mt-4 space-y-3">
 									{hospitals.length > 0 ? (
-									hospitals.map((org) => {
-										const hospitalTypeLabels = {
-											HOSPITAL: "Hospital",
-											BLOOD_CENTER: "Blood Center",
-											BOTH: "Hospital & Blood Center",
-										}
-										const hospitalType = hospitalTypeLabels[org.hospital_type] || org.hospital_type || "Hospital"
-										
-										return (
-											<label
-												key={org.id}
-												className={`flex cursor-pointer flex-col gap-3 rounded-2xl border px-5 py-5 transition ${
-													selectedOrg === org.id.toString() ? "border-[#E91E63] bg-[#1b2a4a] shadow-lg shadow-[#E91E63]/20" : "border-[#3a4f7a] bg-[#0b1730] hover:border-[#4e7fff]"
-												}`}
-											>
-												<div className="flex items-start justify-between gap-3">
-													<div className="flex-1">
-														<div className="flex items-center gap-2 mb-2">
-															<p className="text-lg font-semibold text-white">{org.name}</p>
-															<span className="rounded-full bg-[#E91E63]/20 px-2 py-0.5 text-xs font-medium text-[#E91E63]">
-																Registered
-															</span>
-														</div>
-														<p className="text-sm text-[#d7dcff] mb-3">
-															<span className="font-medium">{hospitalType}</span>
-															{org.city && <span> • {org.city}</span>}
-															{org.zip_code && <span> • {org.zip_code}</span>}
-														</p>
-														
-														{/* Detailed Location Information */}
-														<div className="mt-3 space-y-2 border-t border-[#3a4f7a]/50 pt-3">
-															{org.address && (
+										hospitals.map((org) => {
+											const hospitalTypeLabels = {
+												HOSPITAL: "Hospital",
+												BLOOD_CENTER: "Blood Center",
+												BOTH: "Hospital & Blood Center",
+											}
+											const hospitalType = hospitalTypeLabels[org.hospital_type] || org.hospital_type || "Hospital"
+
+											return (
+												<label
+													key={org.id}
+													className={`flex cursor-pointer flex-col gap-3 rounded-2xl border px-5 py-5 transition ${selectedOrg === org.id.toString() ? "border-[#E91E63] bg-[#1b2a4a] shadow-lg shadow-[#E91E63]/20" : "border-[#3a4f7a] bg-[#0b1730] hover:border-[#4e7fff]"
+														}`}
+												>
+													<div className="flex items-start justify-between gap-3">
+														<div className="flex-1">
+															<div className="flex items-center gap-2 mb-2">
+																<p className="text-lg font-semibold text-white">{org.name}</p>
+																<span className="rounded-full bg-[#E91E63]/20 px-2 py-0.5 text-xs font-medium text-[#E91E63]">
+																	Registered
+																</span>
+															</div>
+															<p className="text-sm text-[#d7dcff] mb-3">
+																<span className="font-medium">{hospitalType}</span>
+																{org.city && <span> • {org.city}</span>}
+																{org.zip_code && <span> • {org.zip_code}</span>}
+															</p>
+
+															{/* Detailed Location Information */}
+															<div className="mt-3 space-y-2 border-t border-[#3a4f7a]/50 pt-3">
+																{org.address && (
+																	<div className="flex items-start gap-2">
+																		<svg className="h-4 w-4 text-[#9fb2e5] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+																		</svg>
+																		<div>
+																			<p className="text-xs font-medium text-[#9fb2e5]">Address:</p>
+																			<p className="text-xs text-[#d7dcff]">{org.address}</p>
+																		</div>
+																	</div>
+																)}
+
 																<div className="flex items-start gap-2">
 																	<svg className="h-4 w-4 text-[#9fb2e5] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
 																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
 																	</svg>
 																	<div>
-																		<p className="text-xs font-medium text-[#9fb2e5]">Address:</p>
-																		<p className="text-xs text-[#d7dcff]">{org.address}</p>
+																		<p className="text-xs font-medium text-[#9fb2e5]">Location:</p>
+																		<p className="text-xs text-[#d7dcff]">
+																			{org.city || "City not specified"}
+																			{org.zip_code && `, ${org.zip_code}`}
+																			{org.latitude && org.longitude && (
+																				<span className="ml-2 text-[#9fb2e5]">
+																					• Coordinates: {parseFloat(org.latitude).toFixed(4)}, {parseFloat(org.longitude).toFixed(4)}
+																				</span>
+																			)}
+																		</p>
 																	</div>
 																</div>
-															)}
-															
-															<div className="flex items-start gap-2">
-																<svg className="h-4 w-4 text-[#9fb2e5] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																	<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-																	<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-																</svg>
-																<div>
-																	<p className="text-xs font-medium text-[#9fb2e5]">Location:</p>
-																	<p className="text-xs text-[#d7dcff]">
-																		{org.city || "City not specified"}
-																		{org.zip_code && `, ${org.zip_code}`}
-																		{org.latitude && org.longitude && (
-																			<span className="ml-2 text-[#9fb2e5]">
-																				• Coordinates: {parseFloat(org.latitude).toFixed(4)}, {parseFloat(org.longitude).toFixed(4)}
-																			</span>
-																		)}
-																	</p>
-																</div>
+
+																{org.phone && (
+																	<div className="flex items-center gap-2">
+																		<svg className="h-4 w-4 text-[#9fb2e5] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+																		</svg>
+																		<div>
+																			<p className="text-xs font-medium text-[#9fb2e5]">Phone:</p>
+																			<p className="text-xs text-[#d7dcff]">{org.phone}</p>
+																		</div>
+																	</div>
+																)}
+
+																{org.website && (
+																	<div className="flex items-center gap-2">
+																		<svg className="h-4 w-4 text-[#9fb2e5] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+																		</svg>
+																		<div>
+																			<p className="text-xs font-medium text-[#9fb2e5]">Website:</p>
+																			<a
+																				href={org.website}
+																				target="_blank"
+																				rel="noopener noreferrer"
+																				className="text-xs text-[#4e7fff] hover:underline"
+																				onClick={(e) => e.stopPropagation()}
+																			>
+																				{org.website}
+																			</a>
+																		</div>
+																	</div>
+																)}
 															</div>
-															
-															{org.phone && (
-																<div className="flex items-center gap-2">
-																	<svg className="h-4 w-4 text-[#9fb2e5] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-																	</svg>
-																	<div>
-																		<p className="text-xs font-medium text-[#9fb2e5]">Phone:</p>
-																		<p className="text-xs text-[#d7dcff]">{org.phone}</p>
-																	</div>
-																</div>
-															)}
-															
-															{org.website && (
-																<div className="flex items-center gap-2">
-																	<svg className="h-4 w-4 text-[#9fb2e5] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-																	</svg>
-																	<div>
-																		<p className="text-xs font-medium text-[#9fb2e5]">Website:</p>
-																		<a 
-																			href={org.website} 
-																			target="_blank" 
-																			rel="noopener noreferrer"
-																			className="text-xs text-[#4e7fff] hover:underline"
-																			onClick={(e) => e.stopPropagation()}
-																		>
-																			{org.website}
-																		</a>
-																	</div>
-																</div>
-															)}
 														</div>
+														<input
+															type="radio"
+															name="organisation"
+															value={org.id}
+															checked={selectedOrg === org.id.toString()}
+															onChange={() => setSelectedOrg(org.id.toString())}
+															className="h-5 w-5 accent-[#E91E63] mt-1 flex-shrink-0"
+														/>
 													</div>
-													<input
-														type="radio"
-														name="organisation"
-														value={org.id}
-														checked={selectedOrg === org.id.toString()}
-														onChange={() => setSelectedOrg(org.id.toString())}
-														className="h-5 w-5 accent-[#E91E63] mt-1 flex-shrink-0"
-													/>
-												</div>
-											</label>
-										)
-									})
-								) : (
-									<div className="rounded-xl border border-dashed border-[#3a4f7a] bg-[#0b1730] p-8 text-center">
-										<p className="text-sm text-[#d7dcff] mb-2">No registered hospitals or centers available at the moment.</p>
-										<p className="text-xs text-[#9fb2e5]">
-											Hospitals and blood centers need to register and log in through the hospital module to appear here.
-										</p>
-									</div>
+												</label>
+											)
+										})
+									) : (
+										<div className="rounded-xl border border-dashed border-[#3a4f7a] bg-[#0b1730] p-8 text-center">
+											<p className="text-sm text-[#d7dcff] mb-2">No registered hospitals or centers available at the moment.</p>
+											<p className="text-xs text-[#9fb2e5]">
+												Hospitals and blood centers need to register and log in through the hospital module to appear here.
+											</p>
+										</div>
 									)}
 								</div>
 							)}

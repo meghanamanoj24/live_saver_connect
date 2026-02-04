@@ -1,0 +1,39 @@
+// Insert these lines after line 1008 in blood.jsx
+// After: <div className="mt-4 rounded-lg border border-[#F6D6E3]/20 bg-[#131326] p-4 space-y-4">
+
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t{/* Age and Weight Fields */}
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t<div className="grid gap-4 sm:grid-cols-2">
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<div>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<label className="block text-xs font-medium text-pink-100/80 mb-1">
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tAge (years) <span className="text-red-400">*</span>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</label>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<input
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\ttype="number"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tvalue={healthStatus.age}
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tonChange={(e) => setHealthStatus({ ...healthStatus, age: e.target.value })}
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmin="1"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmax="120"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tplaceholder="e.g., 25"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\trequired
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t/>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<p className="text-xs text-pink-100/50 mt-1">Must be at least 18 years old</p>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<div>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<label className="block text-xs font-medium text-pink-100/80 mb-1">
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tWeight (kg) <span className="text-red-400">*</span>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</label>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<input
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\ttype="number"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tstep="0.1"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tvalue={healthStatus.weight}
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tonChange={(e) => setHealthStatus({ ...healthStatus, weight: e.target.value })}
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmin="1"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmax="300"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#1A1A2E] px-3 py-2 text-sm text-white outline-none focus:border-[#E91E63]"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tplaceholder="e.g., 65.5"
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\trequired
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t/>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<p className="text-xs text-pink-100/50 mt-1">Must be more than 50 kg (110 lbs)</p>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>
+\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>

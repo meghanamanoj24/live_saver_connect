@@ -1,7 +1,7 @@
 import Head from "next/head"
 import Link from "next/link"
 import { useRouter } from "next/router"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { API_BASE_URL } from "../../lib/api"
 import { validateEmail } from "../../lib/validation"
 
@@ -12,6 +12,12 @@ export default function Login() {
 	const [isLoading, setIsLoading] = useState(false)
 	const [error, setError] = useState("")
 	const router = useRouter()
+
+	useEffect(() => {
+		if (router.isReady && router.query.module) {
+			setModule(router.query.module)
+		}
+	}, [router.isReady, router.query.module])
 
 	const moduleRoutes = useMemo(() => ({
 		donor: "/donor/dashboard",

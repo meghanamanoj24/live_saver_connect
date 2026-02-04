@@ -323,6 +323,7 @@ export default function HospitalNeeds() {
 									<label className="block text-sm font-medium text-pink-100 mb-1">Needed By</label>
 									<input
 										type="date"
+										min={new Date().toISOString().split("T")[0]}
 										value={equipmentForm.needed_by}
 										onChange={(e) => setEquipmentForm({ ...equipmentForm, needed_by: e.target.value })}
 										className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
@@ -450,6 +451,7 @@ export default function HospitalNeeds() {
 									<label className="block text-sm font-medium text-pink-100 mb-1">Needed By (Date & Time)</label>
 									<input
 										type="datetime-local"
+										min={new Date().toISOString().slice(0, 16)}
 										value={needForm.needed_by}
 										onChange={(e) => setNeedForm({ ...needForm, needed_by: e.target.value })}
 										className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
