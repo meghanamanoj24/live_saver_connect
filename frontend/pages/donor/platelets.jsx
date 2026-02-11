@@ -33,6 +33,8 @@ export default function PlateletsDonation() {
 	const [availabilitySaving, setAvailabilitySaving] = useState(false)
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [matchedNeeds, setMatchedNeeds] = useState([])
+	const [emergencyNeeds, setEmergencyNeeds] = useState([])
+	const [activeTab, setActiveTab] = useState("matches")
 	const [donationRequests, setDonationRequests] = useState([])
 	const [loadingRequests, setLoadingRequests] = useState(true)
 	const [coupons, setCoupons] = useState([])
@@ -242,9 +244,14 @@ export default function PlateletsDonation() {
 
 	const loadNeeds = useCallback(async () => {
 		try {
-			const needs = await apiFetch("/needs/?need_type=PLATELETS&status=OPEN")
-			setMatchedNeeds(needs || [])
+			const [allNeeds, matches] = await Promise.all([
+				apiFetch("/needs/?need_type=PLATELETS&status=OPEN"),
+				apiFetch("/needs/matched_needs/")
+			])
+			setEmergencyNeeds(allNeeds || [])
+			setMatchedNeeds((matches || []).filter(m => m.need_type === "PLATELETS"))
 		} catch {
+			setEmergencyNeeds([])
 			setMatchedNeeds([])
 		}
 	}, [])
@@ -453,8 +460,8 @@ export default function PlateletsDonation() {
 	// Calculate stats
 	const plateletStats = useMemo(() => {
 		const completed = donationRequests.filter(r => r.status === "COMPLETED").length
-		const progress = completed % 50
-		const percentage = (progress / 50) * 100
+		const progress = completed % 3
+		const percentage = (progress / 3) * 100
 		return { completed, progress, percentage }
 	}, [donationRequests])
 
@@ -529,222 +536,9 @@ export default function PlateletsDonation() {
 								</div>
 							)}
 
-							<div className="grid gap-6 md:grid-cols-3">
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg shadow-[#e91e6315] flex flex-col items-center justify-center relative overflow-hidden">
-									<div className="relative h-40 w-40">
-										<svg className="h-full w-full -rotate-90 transform" viewBox="0 0 100 100">
-											{/* Background Circle */}
-											<circle
-												className="text-pink-900/20"
-												strokeWidth="8"
-												stroke="currentColor"
-												fill="transparent"
-												r={CIRCLE_RADIUS}
-												cx="50"
-												cy="50"
-											/>
-											{/* Progress Circle */}
-											<circle
-												className="text-[#E91E63] transition-all duration-1000 ease-out"
-												strokeWidth="8"
-												strokeDasharray={CIRCLE_CIRCUMFERENCE}
-												strokeDashoffset={CIRCLE_CIRCUMFERENCE - (plateletStats.percentage / 100) * CIRCLE_CIRCUMFERENCE}
-												strokeLinecap="round"
-												stroke="currentColor"
-												fill="transparent"
-												r={CIRCLE_RADIUS}
-												cx="50"
-												cy="50"
-											/>
-										</svg>
-										<div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-											<span className="text-2xl font-bold text-white">{plateletStats.progress} / 50</span>
-											<span className="text-[10px] text-pink-200 uppercase tracking-widest font-semibold mt-1">Goal</span>
-										</div>
-									</div>
-									<div className="mt-4 text-center">
-										<p className="text-sm font-medium text-pink-100">Total Donations</p>
-										<p className="text-2xl font-bold text-white mt-1">{plateletStats.completed}</p>
-									</div>
-								</div>
-
-								<div className="grid gap-4 md:col-span-2">
-									<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg shadow-[#e91e6315]">
-										<p className="text-sm text-pink-100/80 mb-3">Your Rewards</p>
-										{coupons.length > 0 ? (
-											<div className="grid gap-4 sm:grid-cols-2">
-												{coupons.map((coupon) => (
-													<div key={coupon.id} className="relative overflow-hidden rounded-xl border border-dashed border-[#E91E63]/40 bg-[#1A1A2E] p-4 group">
-														<div className="absolute -right-4 -top-4 h-16 w-16 rotate-12 bg-[#E91E63]/10 rounded-full blur-xl group-hover:bg-[#E91E63]/20 transition"></div>
-														<div className="relative z-10">
-															<div className="flex items-center justify-between">
-																<p className="text-xs font-bold text-[#E91E63] uppercase tracking-wider">Discount Coupon</p>
-																<span className={`text-[10px] ${coupon.is_used ? 'bg-gray-500/20 text-gray-400' : 'bg-green-500/20 text-green-400'} px-2 py-0.5 rounded`}>
-																	{coupon.is_used ? "Used" : "Active"}
-																</span>
-															</div>
-															<div className="mt-3">
-																<p className="text-2xl font-black text-white tracking-widest font-mono">{coupon.code}</p>
-																<p className="text-xs text-pink-100/60 mt-1">{coupon.discount_percentage}% OFF</p>
-															</div>
-														</div>
-													</div>
-												))}
-											</div>
-										) : (
-											<div className="rounded-xl border border-dashed border-white/10 bg-white/5 p-8 text-center">
-												<p className="text-sm text-pink-100/40">Earn coupons by completing donations.</p>
-											</div>
-										)}
-									</div>
-
-									<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg shadow-[#e91e6315]">
-										<p className="text-sm text-pink-100/80 mb-2">Apheresis Readiness</p>
-										<ul className="text-sm text-pink-100/60 space-y-1">
-											<li>• No aspirin/NSAIDs in 48h</li>
-											<li>• Adequate hydration</li>
-											<li>• Allow ~90 mins</li>
-										</ul>
-									</div>
-								</div>
-							</div>
-
-							{/* Health Assessment */}
-							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 shadow-lg">
-								<div className="flex items-center justify-between mb-6">
-									<div>
-										<h2 className="text-xl font-bold text-white flex items-center gap-2">📋 Health Check</h2>
-										<p className="text-sm text-pink-100/60 mt-1">Verify you meet the requirements for platelet donation.</p>
-									</div>
-									<button
-										onClick={() => setShowHealthForm(!showHealthForm)}
-										className="rounded-lg bg-[#E91E63]/20 px-4 py-2 text-xs font-bold text-[#E91E63] hover:bg-[#E91E63]/30 transition"
-									>
-										{showHealthForm ? "Close" : "Start Check"}
-									</button>
-								</div>
-
-								{showHealthForm && (
-									<div className="space-y-6">
-										<div className="grid gap-4 sm:grid-cols-2">
-											<div>
-												<label className="text-xs font-medium text-pink-100/60 mb-1 block">Age</label>
-												<input
-													type="number"
-													value={healthStatus.age}
-													onChange={e => setHealthStatus({ ...healthStatus, age: e.target.value })}
-													className="w-full rounded-lg bg-[#1A1A2E] border border-white/10 px-3 py-2 text-sm text-white"
-												/>
-											</div>
-											<div>
-												<label className="text-xs font-medium text-pink-100/60 mb-1 block">Weight (kg)</label>
-												<input
-													type="number"
-													value={healthStatus.weight}
-													onChange={e => setHealthStatus({ ...healthStatus, weight: e.target.value })}
-													className="w-full rounded-lg bg-[#1A1A2E] border border-white/10 px-3 py-2 text-sm text-white"
-												/>
-											</div>
-										</div>
-										<button onClick={handleHealthAssessment} className="w-full rounded-xl bg-[#E91E63] py-3 text-sm font-bold text-white">
-											Run Health Assessment
-										</button>
-										{healthAssessment && (
-											<div className={`mt-4 rounded-xl border p-4 ${healthAssessment.canDonate ? 'border-green-500/50 bg-green-500/10' : 'border-red-500/50 bg-red-500/10'}`}>
-												<p className="font-bold text-white">{healthAssessment.canDonate ? "Eligible" : "Not Eligible"}</p>
-												<p className="text-xs text-pink-100/80 mt-1">{healthAssessment.message}</p>
-												{healthAssessment.canDonate && (
-													<button onClick={generateHealthReportPDF} className="mt-3 text-xs bg-white/10 px-3 py-1.5 rounded font-bold hover:bg-white/20">
-														Download Report PDF
-													</button>
-												)}
-											</div>
-										)}
-									</div>
-								)}
-							</div>
-
-							<div className="grid gap-6 md:grid-cols-2">
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<h2 className="text-lg font-semibold text-white">Platelet Compatibility</h2>
-									<p className="mt-2 text-sm text-pink-100/70">
-										Based on your blood group <strong>{donor?.blood_group || "Unknown"}</strong>, you can donate platelets to:
-									</p>
-
-									{compatibleGroups.length > 0 ? (
-										<div className="mt-4 rounded-xl bg-[#E91E63]/10 border border-[#E91E63]/30 p-4">
-											<div className="flex flex-wrap gap-2">
-												{compatibleGroups.map(group => (
-													<span key={group} className="px-3 py-1 rounded-full bg-[#E91E63] text-white text-sm font-bold shadow-md">
-														{group}
-													</span>
-												))}
-											</div>
-											<p className="mt-3 text-xs text-pink-200/60">
-												* Only people with these blood types can receive your platelets safeley.
-											</p>
-										</div>
-									) : (
-										<div className="mt-4 text-sm text-gray-400 italic">
-											Update your blood group profile to see compatibility.
-										</div>
-									)}
-
-									<div className="mt-6">
-										<p className="text-sm font-medium text-pink-100/80 mb-2">Compatibility Chart Reference</p>
-										<div className="rounded-xl overflow-hidden border border-[#F6D6E3]/20">
-											<img
-												src="/platelet_compatibility.png"
-												alt="Platelet Compatibility Chart"
-												className="w-full h-auto object-contain"
-											/>
-										</div>
-									</div>
-								</div>
-
-								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-									<div className="flex items-center justify-between">
-										<h2 className="text-lg font-semibold text-white">Matched Platelet Needs</h2>
-										<Link href="/needs" legacyBehavior>
-											<a className="text-sm text-[#E91E63]">View All</a>
-										</Link>
-									</div>
-									<p className="text-xs text-pink-100/50 mt-1 mb-4">
-										Showing only requests compatible with your blood group ({donor?.blood_group || "Unknown"}).
-									</p>
-
-									{filteredMatchedNeeds.length ? (
-										<ul className="space-y-3">
-											{filteredMatchedNeeds.map((need) => (
-												<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/50 transition">
-													<div className="flex items-center justify-between text-sm text-pink-100/80">
-														<span className="font-medium text-white">{need.title || "Platelet Need"}</span>
-														<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
-															{need.required_blood_group || "Any"}
-														</span>
-													</div>
-													<p className="mt-2 text-sm text-pink-100/70">
-														{need.city} {need.zip_code ? `• ${need.zip_code}` : ""}
-													</p>
-													{need.contact_phone && (
-														<p className="mt-1 text-sm text-pink-100/70">
-															Contact: <span className="font-medium text-white">{need.contact_phone}</span>
-														</p>
-													)}
-												</li>
-											))}
-										</ul>
-									) : (
-										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-center text-pink-100/70">
-											<p>No compatible platelet needs found matching your blood group.</p>
-										</div>
-									)}
-								</div>
-							</div>
-
 							{/* Health Verification Banner */}
 							{!healthReportUploaded && (
-								<div className="rounded-2xl border-2 border-yellow-500/50 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 p-6 mb-6 shadow-lg">
+								<div className="rounded-2xl border-2 border-yellow-500/50 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 p-6 shadow-lg">
 									<div className="flex items-start gap-4">
 										<div className="flex-shrink-0">
 											<div className="h-12 w-12 rounded-full bg-yellow-500/20 flex items-center justify-center">
@@ -795,7 +589,7 @@ export default function PlateletsDonation() {
 
 							{/* Upload Success Banner */}
 							{healthReportUploaded && !hasActiveRequest && (
-								<div className="rounded-2xl border-2 border-green-500/50 bg-gradient-to-r from-green-500/10 to-emerald-500/10 p-4 mb-6">
+								<div className="rounded-2xl border-2 border-green-500/50 bg-gradient-to-r from-green-500/10 to-emerald-500/10 p-4">
 									<div className="flex items-center gap-3">
 										<div className="flex-shrink-0">
 											<div className="h-10 w-10 rounded-full bg-green-500/20 flex items-center justify-center">
@@ -814,7 +608,7 @@ export default function PlateletsDonation() {
 
 							{/* Active Request Banner */}
 							{hasActiveRequest && (
-								<div className="rounded-2xl border-2 border-blue-500/50 bg-gradient-to-r from-blue-500/10 to-cyan-500/10 p-4 mb-6">
+								<div className="rounded-2xl border-2 border-blue-500/50 bg-gradient-to-r from-blue-500/10 to-cyan-500/10 p-4">
 									<div className="flex items-center gap-3">
 										<div className="flex-shrink-0">
 											<div className="h-10 w-10 rounded-full bg-blue-500/20 flex items-center justify-center">
@@ -832,7 +626,7 @@ export default function PlateletsDonation() {
 							)}
 
 
-							{/* My Platelet Requests Section (New) */}
+							{/* My Platelet Requests Section */}
 							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-8 shadow-xl">
 								<div className="flex items-center justify-between mb-8">
 									<div>
@@ -988,6 +782,198 @@ export default function PlateletsDonation() {
 								)}
 							</div>
 
+							{/* Open Platelet Needs Section */}
+							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 mb-6">
+								<div className="flex flex-col gap-4 mb-6">
+									<div className="flex items-center justify-between">
+										<h2 className="text-lg font-semibold text-white">Open Platelet Needs</h2>
+									</div>
+									<div className="flex gap-2 p-1 bg-white/5 rounded-xl">
+										<button
+											onClick={() => setActiveTab("matches")}
+											className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "matches"
+												? "bg-red-600 text-white shadow-lg shadow-red-600/20"
+												: "text-pink-100/40 hover:text-pink-100/60"
+												}`}
+										>
+											Matches ({matchedNeeds.length})
+										</button>
+										<button
+											onClick={() => setActiveTab("all")}
+											className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "all"
+												? "bg-[#1B3C73] text-white shadow-lg shadow-[#1B3C73]/20"
+												: "text-pink-100/40 hover:text-pink-100/60"
+												}`}
+										>
+											All ({emergencyNeeds.length})
+										</button>
+									</div>
+								</div>
+
+								{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).length ? (
+									<ul className="space-y-3">
+										{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).slice(0, 5).map((need) => {
+											const isUrgent = need.status === "URGENT"
+											return (
+												<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition group">
+													<div className="flex items-start justify-between gap-3">
+														<div className="flex-1 min-w-0">
+															<div className="flex items-center gap-2 mb-2">
+																<span className="font-bold text-white text-sm truncate">{need.title || need.need_type}</span>
+																<span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-tighter ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
+																	{need.status || "NORMAL"}
+																</span>
+															</div>
+															<div className="space-y-1">
+																<p className="text-[10px] text-pink-100/60 flex items-center gap-1">
+																	📍 {need.city}
+																</p>
+																<p className="text-[10px] text-pink-100/70 border-t border-white/5 pt-1 mt-1 font-mono">
+																	{need.contact_phone}
+																</p>
+															</div>
+														</div>
+														<Link href={`/needs/${need.id}`} legacyBehavior>
+															<a className="rounded-lg h-10 w-10 flex items-center justify-center bg-[#E91E63]/10 text-[#E91E63] hover:bg-[#E91E63] hover:text-white transition-all shadow-sm">
+																<span className="font-black text-xs">{need.required_blood_group || 'Any'}</span>
+															</a>
+														</Link>
+													</div>
+												</li>
+											)
+										})}
+									</ul>
+								) : (
+									<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70 text-center">
+										<p>No {activeTab === "matches" ? "compatible" : "active"} platelet requests found.</p>
+									</div>
+								)}
+							</div>
+
+							{/* Platelet Compatibility + Matched Needs */}
+							<div className="grid gap-6 md:grid-cols-2">
+								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+									<h2 className="text-lg font-semibold text-white">Platelet Compatibility</h2>
+									<p className="mt-2 text-sm text-pink-100/70">
+										Based on your blood group <strong>{donor?.blood_group || "Unknown"}</strong>, you can donate platelets to:
+									</p>
+									{compatibleGroups.length > 0 ? (
+										<div className="mt-4 rounded-xl bg-[#E91E63]/10 border border-[#E91E63]/30 p-4">
+											<div className="flex flex-wrap gap-2">
+												{compatibleGroups.map(group => (
+													<span key={group} className="px-3 py-1 rounded-full bg-[#E91E63] text-white text-sm font-bold shadow-md">
+														{group}
+													</span>
+												))}
+											</div>
+											<p className="mt-3 text-xs text-pink-200/60">
+												* Only people with these blood types can receive your platelets safely.
+											</p>
+										</div>
+									) : (
+										<div className="mt-4 text-sm text-gray-400 italic">
+											Update your blood group profile to see compatibility.
+										</div>
+									)}
+									<div className="mt-6">
+										<p className="text-sm font-medium text-pink-100/80 mb-2">Compatibility Chart Reference</p>
+										<div className="rounded-xl overflow-hidden border border-[#F6D6E3]/20">
+											<img src="/platelet_compatibility.png" alt="Platelet Compatibility Chart" className="w-full h-auto object-contain" />
+										</div>
+									</div>
+								</div>
+
+								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
+									<div className="flex items-center justify-between">
+										<h2 className="text-lg font-semibold text-white">Matched Platelet Needs</h2>
+										<Link href="/needs" legacyBehavior>
+											<a className="text-sm text-[#E91E63]">View All</a>
+										</Link>
+									</div>
+									<p className="text-xs text-pink-100/50 mt-1 mb-4">
+										Showing only requests compatible with your blood group ({donor?.blood_group || "Unknown"}).
+									</p>
+									{filteredMatchedNeeds.length ? (
+										<ul className="space-y-3">
+											{filteredMatchedNeeds.map((need) => (
+												<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/50 transition">
+													<div className="flex items-center justify-between text-sm text-pink-100/80">
+														<span className="font-medium text-white">{need.title || "Platelet Need"}</span>
+														<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs text-[#E91E63]">
+															{need.required_blood_group || "Any"}
+														</span>
+													</div>
+													<p className="mt-2 text-sm text-pink-100/70">
+														{need.city} {need.zip_code ? `• ${need.zip_code}` : ""}
+													</p>
+													{need.contact_phone && (
+														<p className="mt-1 text-sm text-pink-100/70">
+															Contact: <span className="font-medium text-white">{need.contact_phone}</span>
+														</p>
+													)}
+												</li>
+											))}
+										</ul>
+									) : (
+										<div className="mt-4 rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-center text-pink-100/70">
+											<p>No compatible platelet needs found matching your blood group.</p>
+										</div>
+									)}
+								</div>
+							</div>
+
+							{/* Compact Stats, Rewards & Readiness Row */}
+							<div className="rounded-2xl border border-[#F6D6E3]/30 bg-[#131326] p-4 shadow-sm">
+								<div className="flex flex-col md:flex-row items-center gap-4">
+									{/* Mini Progress Circle + Stats */}
+									<div className="flex items-center gap-4 shrink-0">
+										<div className="relative h-16 w-16">
+											<svg className="h-full w-full -rotate-90 transform" viewBox="0 0 100 100">
+												<circle className="text-pink-900/20" strokeWidth="10" stroke="currentColor" fill="transparent" r={CIRCLE_RADIUS} cx="50" cy="50" />
+												<circle className="text-[#E91E63] transition-all duration-1000 ease-out" strokeWidth="10" strokeDasharray={CIRCLE_CIRCUMFERENCE} strokeDashoffset={CIRCLE_CIRCUMFERENCE - (plateletStats.percentage / 100) * CIRCLE_CIRCUMFERENCE} strokeLinecap="round" stroke="currentColor" fill="transparent" r={CIRCLE_RADIUS} cx="50" cy="50" />
+											</svg>
+											<div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+												<span className="text-xs font-bold text-white leading-none">{plateletStats.progress}/3</span>
+											</div>
+										</div>
+										<div>
+											<p className="text-xs text-pink-100/60 uppercase tracking-wider font-semibold">Total Donations</p>
+											<p className="text-lg font-bold text-white">{plateletStats.completed}</p>
+										</div>
+									</div>
+									<div className="hidden md:block w-px h-12 bg-[#F6D6E3]/20"></div>
+									{/* Rewards */}
+									<div className="flex-1 min-w-0">
+										<p className="text-xs text-pink-100/60 uppercase tracking-wider font-semibold mb-2">Your Rewards</p>
+										{coupons.filter(c => !c.is_used).length > 0 ? (
+											<div className="max-h-24 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin', scrollbarColor: '#E91E63 transparent' }}>
+												<div className="flex flex-wrap gap-2">
+													{coupons.filter(c => !c.is_used).map((coupon) => (
+														<div key={coupon.id} className="flex items-center gap-2 rounded-lg border border-dashed border-[#E91E63]/40 bg-[#1A1A2E] px-3 py-1.5">
+															<span className="text-sm font-black text-white font-mono">{coupon.code}</span>
+															<span className="text-[10px] text-pink-100/60">{coupon.discount_percentage}% OFF</span>
+															<span className="text-[8px] text-green-400 font-bold">Active</span>
+														</div>
+													))}
+												</div>
+											</div>
+										) : (
+											<p className="text-xs text-pink-100/40">Earn coupons by completing donations.</p>
+										)}
+									</div>
+									<div className="hidden md:block w-px h-12 bg-[#F6D6E3]/20"></div>
+									{/* Readiness */}
+									<div className="shrink-0">
+										<p className="text-xs text-pink-100/60 uppercase tracking-wider font-semibold mb-1">Readiness</p>
+										<ul className="text-[11px] text-pink-100/50 space-y-0.5">
+											<li>• No aspirin/NSAIDs 48h</li>
+											<li>• Hydrate well</li>
+											<li>• Allow ~90 mins</li>
+										</ul>
+									</div>
+								</div>
+							</div>
+
 							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
 								<h2 className="text-lg font-semibold text-white">Platelet Donation Guide</h2>
 								<p className="mt-3 text-sm text-pink-100/80">
@@ -1014,48 +1000,46 @@ export default function PlateletsDonation() {
 							</div>
 						</>
 					)}
-				</section >
-			</main >
+				</section>
+			</main>
 
 			{/* Eligibility Popup Modal */}
-			{
-				showEligibilityPopup && (
-					<div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-						<div className="bg-[#1A1A2E] rounded-2xl border border-yellow-500/50 max-w-md w-full p-6 shadow-2xl">
-							<div className="flex items-start gap-4">
-								<div className="flex-shrink-0">
-									<div className="h-12 w-12 rounded-full bg-yellow-500/20 flex items-center justify-center">
-										<svg className="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-										</svg>
-									</div>
+			{showEligibilityPopup && (
+				<div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+					<div className="bg-[#1A1A2E] rounded-2xl border border-yellow-500/50 max-w-md w-full p-6 shadow-2xl">
+						<div className="flex items-start gap-4">
+							<div className="flex-shrink-0">
+								<div className="h-12 w-12 rounded-full bg-yellow-500/20 flex items-center justify-center">
+									<svg className="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+									</svg>
 								</div>
-								<div className="flex-1">
-									<h3 className="text-lg font-bold text-yellow-300 mb-2">Action Required</h3>
-									<p className="text-sm text-yellow-100/90 mb-4">{eligibilityMessage}</p>
-									<div className="flex flex-col sm:flex-row gap-3">
-										<Link href="/donor/blood#health-status" legacyBehavior>
-											<a className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#E91E63] px-5 py-2 text-sm font-bold text-white hover:bg-[#D81B60] transition-all">
-												<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-													<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-												</svg>
-												Go to Health Check
-											</a>
-										</Link>
-										<button
-											type="button"
-											onClick={() => setShowEligibilityPopup(false)}
-											className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-500 px-5 py-2 text-sm font-medium text-gray-300 hover:bg-gray-500/20 transition-all"
-										>
-											Close
-										</button>
-									</div>
+							</div>
+							<div className="flex-1">
+								<h3 className="text-lg font-bold text-yellow-300 mb-2">Action Required</h3>
+								<p className="text-sm text-yellow-100/90 mb-4">{eligibilityMessage}</p>
+								<div className="flex flex-col sm:flex-row gap-3">
+									<Link href="/donor/blood#health-status" legacyBehavior>
+										<a className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#E91E63] px-5 py-2 text-sm font-bold text-white hover:bg-[#D81B60] transition-all">
+											<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+												<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+											</svg>
+											Go to Health Check
+										</a>
+									</Link>
+									<button
+										type="button"
+										onClick={() => setShowEligibilityPopup(false)}
+										className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-500 px-5 py-2 text-sm font-medium text-gray-300 hover:bg-gray-500/20 transition-all"
+									>
+										Close
+									</button>
 								</div>
 							</div>
 						</div>
 					</div>
-				)
-			}
+				</div>
+			)}
 		</>
 	)
 }

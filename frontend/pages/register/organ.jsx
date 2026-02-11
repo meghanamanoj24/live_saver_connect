@@ -33,7 +33,6 @@ const DEFAULT_FORM = {
 	family_responsibility: false,
 	living_kidney_donation: false,
 	medical_student_donation: false,
-	health_certificate: null,
 	selected_hospitals: [],
 	date_of_birth: "",
 	blood_group: "",
@@ -86,6 +85,13 @@ export default function OrganRegistry() {
 	const [isSubmittingDeceased, setIsSubmittingDeceased] = useState(false)
 	const [accidentAlerts, setAccidentAlerts] = useState([])
 	const [userLocation, setUserLocation] = useState(null)
+	const [pledgeHistory, setPledgeHistory] = useState([])
+	const [reportUploaded, setReportUploaded] = useState(false)
+	const [uploadedFile, setUploadedFile] = useState(null)
+	const [selectedSendHospitals, setSelectedSendHospitals] = useState([])
+	const [isSendingToHospital, setIsSendingToHospital] = useState(false)
+	const [showHospitalSelection, setShowHospitalSelection] = useState(false)
+	const [myDeceasedRequests, setMyDeceasedRequests] = useState([])
 
 	// Check authentication
 	useEffect(() => {
@@ -148,10 +154,12 @@ export default function OrganRegistry() {
 					]);
 
 					if (!cancelled && userProfile) {
-						setCurrentUser(userProfile) // Store user profile
+						console.log("DEBUG: Fetched User Profile:", userProfile)
+						setCurrentUser(userProfile)
 					}
 
 					if (!cancelled && profile) {
+						console.log("DEBUG: Fetched Organ Pledge Profile:", profile)
 						setPledgeStatus(profile)
 						setForm({
 							organs_to_donate: profile.organs ? profile.organs.split(",") : [],
@@ -161,10 +169,10 @@ export default function OrganRegistry() {
 							living_kidney_donation: profile.living_kidney_donation || false,
 							medical_student_donation: profile.medical_student_donation || false,
 							selected_hospitals: profile.selected_hospitals?.map(h => h.id) || [],
-							date_of_birth: profile.date_of_birth || "",
-							// Fallback to user profile if organ profile fields are empty
-							blood_group: profile.blood_group || userProfile?.blood_group || "",
-							phone: profile.phone || userProfile?.phone || "",
+							// Use registration data from either profile or userProfile
+							date_of_birth: profile.registration_dob || userProfile?.date_of_birth || profile.date_of_birth || "",
+							blood_group: profile.registration_blood_group || userProfile?.blood_group || profile.blood_group || "",
+							phone: profile.registration_phone || userProfile?.phone || profile.phone || "",
 							address: profile.address || "",
 							emergency_contact_name: profile.emergency_contact_name || "",
 							emergency_contact_phone: profile.emergency_contact_phone || "",
@@ -172,10 +180,12 @@ export default function OrganRegistry() {
 						})
 					} else if (!cancelled && userProfile) {
 						// Profile doesn't exist, pre-fill from user profile
+						console.log("DEBUG: Pre-filling form from User Profile (No existing pledge)")
 						setForm(prev => ({
 							...prev,
 							blood_group: userProfile.blood_group || "",
 							phone: userProfile.phone || "",
+							date_of_birth: userProfile.date_of_birth || "",
 						}));
 					}
 				} catch (e) {
@@ -212,8 +222,90 @@ export default function OrganRegistry() {
 			}
 		}
 		loadData()
+		loadPledgeHistory()
 		return () => { cancelled = true }
 	}, [isAuthenticated, userLocation])
+
+	useEffect(() => {
+		console.log("DEBUG: currentUser state changed:", currentUser)
+	}, [currentUser])
+
+	// Auto-fill Deceased Request form when tab becomes active
+	useEffect(() => {
+		if (activeTab === "deceased" && currentUser) {
+			console.log("Auto-filling deceased form with user details:", currentUser)
+			setDeceasedForm(prev => ({
+				...prev,
+				requester_name: currentUser.first_name ? `${currentUser.first_name} ${currentUser.last_name || ""}`.trim() : prev.requester_name,
+				requester_phone: currentUser.phone || prev.requester_phone,
+				requester_email: currentUser.email || prev.requester_email,
+			}))
+		}
+	}, [activeTab, currentUser])
+
+	async function loadPledgeHistory() {
+		try {
+			const data = await apiFetch("/donors/download_history/?report_type=ORGAN_PLEDGE")
+			setPledgeHistory(data)
+		} catch (err) {
+			console.error("Failed to load pledge history:", err)
+		}
+	}
+
+	async function loadDeceasedRequests() {
+		if (!isAuthenticated) return
+		try {
+			const data = await apiFetch("/deceased-donor-requests/?user=me")
+			setMyDeceasedRequests(data)
+		} catch (err) {
+			console.error("Failed to load deceased requests:", err)
+		}
+	}
+
+	useEffect(() => {
+		if (activeTab === "deceased") {
+			loadDeceasedRequests()
+		}
+	}, [activeTab, isAuthenticated])
+
+	async function handleDeceasedSubmit(e) {
+		e.preventDefault()
+		setIsSubmittingDeceased(true)
+		try {
+			await apiFetch("/deceased-donor-requests/", {
+				method: "POST",
+				body: JSON.stringify(deceasedForm)
+			})
+			alert("Request submitted successfully!")
+			setDeceasedForm({ ...DEFAULT_DECEASED_FORM, requester_name: deceasedForm.requester_name, requester_phone: deceasedForm.requester_phone, requester_email: deceasedForm.requester_email })
+			loadDeceasedRequests()
+		} catch (error) {
+			alert(error.message || "Failed to submit request")
+		} finally {
+			setIsSubmittingDeceased(false)
+		}
+	}
+
+	async function handleDeceasedCancel(id) {
+		if (!confirm("Are you sure you want to cancel this request?")) return
+		try {
+			await apiFetch(`/deceased-donor-requests/${id}/cancel/`, { method: "POST" })
+			loadDeceasedRequests()
+		} catch (error) {
+			alert(error.message || "Failed to cancel request")
+		}
+	}
+
+	async function handleConfirmAmbulance(id) {
+		if (!confirm("Please confirm that the ambulance has arrived and you are handing over the body.")) return
+		try {
+			await apiFetch(`/deceased-donor-requests/${id}/confirm_ambulance/`, { method: "POST" })
+			alert("Process Completed. Thank you for your donation.")
+			loadDeceasedRequests()
+		} catch (error) {
+			alert(error.message || "Failed to confirm.")
+		}
+	}
 
 	// Load hospitals
 	useEffect(() => {
@@ -339,12 +431,40 @@ export default function OrganRegistry() {
 				})
 			}
 
-			setPledgeStatus(response)
+			// Chain the commit action immediately for secure pledge generation
+			try {
+				const commitResponse = await apiFetch(`/organ-donors/${response.id}/commit_pledge/`, {
+					method: "POST",
+				})
+				setPledgeStatus(commitResponse)
+				setReportUploaded(false)
+				setUploadedFile(null)
+
+				// Auto-download the new secure report
+				if (commitResponse.pledge_report) {
+					const link = document.createElement("a");
+					link.href = commitResponse.pledge_report;
+					link.setAttribute("download", `Secure_Organ_Pledge_${currentUser?.last_name || "Entry"}.pdf`);
+					document.body.appendChild(link);
+					link.click();
+					document.body.removeChild(link);
+				}
+
+				setFeedback({
+					type: "success",
+					message: "Pledge Registered & Securely Committed! New report downloaded. Please verify and send the NEW report to hospitals.",
+				})
+				loadPledgeHistory()
+			} catch (commitError) {
+				console.error("Commit failed:", commitError)
+				setPledgeStatus(response) // Fallback to saved but not committed state
+				setFeedback({
+					type: "warning",
+					message: "Pledge saved, but secure commitment failed. Please try 'Commit' button again.",
+				})
+			}
+
 			setIsEditing(false)
-			setFeedback({
-				type: "success",
-				message: "Pledge Registered! Thank you for giving the Gift of Life.",
-			})
 		} catch (error) {
 			setFeedback({
 				type: "error",
@@ -363,14 +483,53 @@ export default function OrganRegistry() {
 				method: "POST",
 			})
 			setPledgeStatus(response)
+			setReportUploaded(false)
+			setUploadedFile(null)
+
+			// Auto-download the new secure report
+			if (response.pledge_report) {
+				const link = document.createElement("a");
+				link.href = response.pledge_report;
+				link.setAttribute("download", `Secure_Organ_Pledge_${currentUser?.last_name || "Entry"}.pdf`);
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			}
+
 			setFeedback({
 				type: "success",
-				message: "Pledge Committed! You have finalized your commitment to save lives.",
+				message: "Pledge Committed! New report downloaded. Please verify and send the NEW report to hospitals.",
 			})
+			loadPledgeHistory()
 		} catch (error) {
 			setFeedback({
 				type: "error",
 				message: error.message || "Commitment failed. Please try again.",
+			})
+		} finally {
+			setIsSubmitting(false)
+		}
+	}
+
+	async function handleCancelPledge() {
+		if (!pledgeStatus) return
+		setIsSubmitting(true)
+		try {
+			await apiFetch(`/organ-donors/${pledgeStatus.id}/donor_finalize/`, {
+				method: "POST",
+				body: JSON.stringify({ action: "reject" }),
+			})
+			setFeedback({
+				type: "success",
+				message: "Pledge cancelled and removed.",
+			})
+			setPledgeStatus(null)
+			resetForm()
+			loadPledgeHistory()
+		} catch (error) {
+			setFeedback({
+				type: "error",
+				message: error.message || "Cancellation failed. Please try again.",
 			})
 		} finally {
 			setIsSubmitting(false)
@@ -418,27 +577,80 @@ export default function OrganRegistry() {
 	}
 
 	async function generatePledgeReport() {
-		const reportData = {
-			id: pledgeStatus?.id || "PENDING",
-			user: pledgeStatus?.user || currentUser || {},
-			blood_group: pledgeStatus?.blood_group || form.blood_group,
-			date_of_birth: pledgeStatus?.date_of_birth || form.date_of_birth,
-			phone: pledgeStatus?.phone || form.phone,
-			address: pledgeStatus?.address || form.address,
-			health_certificate: pledgeStatus?.health_certificate || form.health_certificate,
-			post_mortem_consent: pledgeStatus ? pledgeStatus.post_mortem_consent : form.post_mortem_consent,
-			family_responsibility: pledgeStatus ? pledgeStatus.family_responsibility : form.family_responsibility,
-			emergency_contact_name: pledgeStatus?.emergency_contact_name || form.emergency_contact_name,
-			emergency_contact_phone: pledgeStatus?.emergency_contact_phone || form.emergency_contact_phone,
-			emergency_contact_relation: pledgeStatus?.emergency_contact_relation || form.emergency_contact_relation,
-			organs: pledgeStatus?.organs ? pledgeStatus.organs : (form.organs_to_donate.includes("ALL") ? "ALL ORGANS" : form.organs_to_donate.join(", ")),
-			status: pledgeStatus?.status,
-			accepted_by_hospital_name: pledgeStatus?.accepted_by_hospital_name,
-			hospital_message: pledgeStatus?.hospital_message
+		try {
+			// Trigger Blockchain-Tracked Secure PDF Generation
+			const blob = await apiFetch("/organ-donors/generate_draft_pledge/", {
+				method: "POST",
+				responseAs: "blob",
+				body: JSON.stringify({
+					...form,
+					organs_list: form.organs_to_donate
+				})
+			});
+
+			const url = window.URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = url;
+			link.setAttribute("download", `Draft_Organ_Pledge_${currentUser?.last_name || "Entry"}.pdf`);
+			document.body.appendChild(link);
+			link.click();
+			document.body.removeChild(link);
+			window.URL.revokeObjectURL(url);
+
+			setFeedback({
+				type: "success",
+				message: "Blockchain Verified Draft Report generated and recorded in the ledger."
+			});
+			// Refresh history
+			const data = await apiFetch("/donors/download_history/?report_type=ORGAN_PLEDGE")
+			setPledgeHistory(data)
+		} catch (err) {
+			console.error("Draft generation failed:", err);
+			setFeedback({
+				type: "error",
+				message: "Failed to generate blockchain-tracked report."
+			});
+		}
+	}
+
+	async function handleReportUpload(e) {
+		const file = e.target.files[0]
+		if (!file) return
+
+		if (file.type !== "application/pdf") {
+			alert("Please upload a PDF file.")
+			return
 		}
 
-		await generatePdfDetails(reportData);
+		try {
+			const formData = new FormData()
+			formData.append('file', file)
+			setUploadedFile(file)
+
+			const response = await apiFetch('/organ-donors/verify_pledge_report/', {
+				method: 'POST',
+				body: formData,
+			})
+
+			if (response.valid) {
+				setReportUploaded(true)
+				setFeedback({
+					type: "success",
+					message: `Verification Successful! Blockchain ID: ${response.download_id}. Timestamp: ${new Date(response.timestamp).toLocaleString()}. This report is authentic.`
+				})
+			} else {
+				alert(`Verification Failed: ${response.detail}`)
+			}
+		} catch (err) {
+			console.error("Verification Error:", err)
+			if (err.message && err.message.includes("replaced by a newer draft")) {
+				alert("🚫 Outdated Report: This report has been replaced by a newer version because you modified your pledge. Please download the latest version from the dashboard above and upload that one.")
+			} else {
+				alert(err.message || "Error verifying pledge integrity.")
+			}
+		}
 	}
+
 	function startEditing() {
 		if (!pledgeStatus) return
 		setIsEditing(true)
@@ -447,10 +659,107 @@ export default function OrganRegistry() {
 	}
 
 	function resetForm() {
-		setForm(DEFAULT_FORM)
+		console.log("DEBUG: Starting resetForm. Current cached User:", currentUser, "Current Pledge Status:", pledgeStatus)
+
+		const dobSource = pledgeStatus?.registration_dob || currentUser?.date_of_birth || "";
+		const bgSource = pledgeStatus?.registration_blood_group || currentUser?.blood_group || "";
+		const phoneSource = pledgeStatus?.registration_phone || currentUser?.phone || "";
+
+		const newForm = {
+			...DEFAULT_FORM,
+			date_of_birth: dobSource,
+			blood_group: bgSource,
+			phone: phoneSource,
+		}
+		console.log("DEBUG: resetForm - new form state result:", newForm)
+		setForm(newForm)
 		setFeedback(null)
 		if (!pledgeStatus) {
 			setIsEditing(true)
+		}
+	}
+
+	async function handleFinalizeCommitment() {
+		setIsSubmitting(true)
+		try {
+			const response = await apiFetch(`/organ-donors/${pledgeStatus.id}/commit_pledge/`, {
+				method: "POST"
+			})
+			setPledgeStatus(response)
+			setFeedback({
+				type: "success",
+				message: "Commitment Finalized! Hospitals can now proceed with your pledge."
+			})
+			setReportUploaded(false)
+		} catch (error) {
+			alert(error.message || "Failed to finalize commitment.")
+		} finally {
+			setIsSubmitting(false)
+		}
+	}
+
+	async function handleSendVerifiedReport() {
+		if (selectedSendHospitals.length === 0) {
+			alert("Please select at least one hospital to send the report to.")
+			return
+		}
+
+		setIsSendingToHospital(true)
+		try {
+			const formData = new FormData()
+			formData.append('file', uploadedFile)
+			selectedSendHospitals.forEach(id => {
+				formData.append('selected_hospitals', id)
+			})
+
+			const response = await apiFetch('/organ-donors/submit_verified_report/', {
+				method: 'POST',
+				body: formData,
+			})
+
+			setPledgeStatus(response)
+			setReportUploaded(false)
+			setUploadedFile(null)
+			setSelectedSendHospitals([])
+			setFeedback({
+				type: "success",
+				message: "Report sent successfully! Hospitals have been notified and can now verify your pledge."
+			})
+		} catch (err) {
+			if (err.message && err.message.includes("replaced by a newer draft")) {
+				alert("🚫 Outdated Report: This report has been replaced by a newer version since you clicked 'Modify Pledge'. Please download the latest version and use that instead.")
+			} else {
+				alert(err.message || "Failed to send report to hospitals.")
+			}
+		} finally {
+			setIsSendingToHospital(false)
+		}
+	}
+
+	async function handleDonorFinalize(action) {
+		setIsSubmitting(true)
+		try {
+			const response = await apiFetch(`/organ-donors/${pledgeStatus.id}/donor_finalize/`, {
+				method: "POST",
+				body: JSON.stringify({ action })
+			})
+			if (response.status === "DELETED") {
+				setPledgeStatus(null)
+				setFeedback({
+					type: "success",
+					message: "Pledge deleted. You can now create a new one."
+				})
+			} else {
+				setPledgeStatus(response)
+				setFeedback({
+					type: "success",
+					message: "Commitment Finalized! Thank you for your selfless contribution."
+				})
+			}
+		} catch (error) {
+			alert(error.message || "Error processing your request.")
+		} finally {
+			setIsSubmitting(false)
 		}
 	}
 
@@ -611,12 +920,12 @@ export default function OrganRegistry() {
 														Update your commitment at any time. Verified transplant centres access this data securely with family approval.
 													</p>
 													{pledgeStatus && (
-														<span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pledgeStatus.status === 'COMMITTED' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-															pledgeStatus.status === 'ACCEPTED' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
-																pledgeStatus.status === 'BODY_RECEIVED' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-																	'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+														<span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pledgeStatus.status === 'COMMITTED' || pledgeStatus.status === 'ACCEPTED' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+															pledgeStatus.status === 'REJECTED' || pledgeStatus.status === 'CANCELLED' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+																pledgeStatus.status === 'BODY_RECEIVED' || pledgeStatus.status === 'COMPLETED' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+																	'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
 															}`}>
-															{pledgeStatus.status}
+															{pledgeStatus.status === 'ACCEPTED' ? 'ACCEPTED BY HOSPITAL' : pledgeStatus.status === 'COMPLETED' ? 'PLEDGE FULFILLED' : pledgeStatus.status}
 														</span>
 													)}
 												</div>
@@ -630,13 +939,24 @@ export default function OrganRegistry() {
 													>
 														Modify Pledge
 													</button>
-													<button
-														type="button"
-														onClick={generatePledgeReport}
-														className="inline-flex items-center rounded-lg border border-[#E91E63] px-4 py-2 text-sm font-semibold text-[#E91E63] transition hover:bg-[#E91E63]/10"
-													>
-														Download Report
-													</button>
+													{pledgeStatus.pledge_report ? (
+														<a
+															href={pledgeStatus.pledge_report}
+															target="_blank"
+															rel="noopener noreferrer"
+															className="inline-flex items-center rounded-lg border border-[#E91E63] px-4 py-2 text-sm font-semibold text-[#E91E63] transition hover:bg-[#E91E63]/10"
+														>
+															Download Secure Report
+														</a>
+													) : (
+														<button
+															type="button"
+															onClick={generatePledgeReport}
+															className="inline-flex items-center rounded-lg border border-[#E91E63] px-4 py-2 text-sm font-semibold text-[#E91E63] transition hover:bg-[#E91E63]/10"
+														>
+															Download Draft Report
+														</button>
+													)}
 													<button
 														type="button"
 														onClick={async () => {
@@ -653,17 +973,13 @@ export default function OrganRegistry() {
 													</button>
 													<button
 														type="button"
-														onClick={async () => {
-															try {
-																const res = await apiFetch("/organ-donors/notify_hospitals/", { method: "POST" });
-																setFeedback({ type: "success", message: res.message });
-															} catch (err) {
-																setFeedback({ type: "error", message: err.message || "Failed to transmit report to hospitals." });
-															}
+														onClick={() => {
+															const el = document.getElementById("verify-section");
+															if (el) el.scrollIntoView({ behavior: 'smooth' });
 														}}
 														className="inline-flex items-center rounded-lg border border-green-500/50 px-4 py-2 text-sm font-semibold text-green-300 transition hover:bg-green-500/10"
 													>
-														Send to Hospital
+														Verify & Notify Hospital
 													</button>
 													<button
 														type="button"
@@ -675,6 +991,194 @@ export default function OrganRegistry() {
 												</div>
 											)}
 										</div>
+
+										{pledgeStatus && !showForm && (
+											<div id="verify-section" className="mt-8 rounded-2xl border border-blue-500/20 bg-blue-500/5 p-6 shadow-lg shadow-blue-500/5">
+												<div className="flex items-start gap-4">
+													<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
+														<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+														</svg>
+													</div>
+													<div className="flex-1">
+														<h3 className="text-lg font-bold text-white">Upload & Verify Report</h3>
+														<p className="mt-1 text-sm text-pink-100/70">
+															Upload your generated pledge report to verify its blockchain integrity and notify hospitals.
+														</p>
+														<div className="mt-4">
+															<input
+																type="file"
+																accept="application/pdf"
+																onChange={handleReportUpload}
+																className="block w-full text-sm text-pink-100/50
+																	file:mr-4 file:py-2 file:px-4
+																	file:rounded-lg file:border-0
+																	file:text-sm file:font-semibold
+																	file:bg-blue-600 file:text-white
+																	hover:file:bg-blue-500
+																	file:cursor-pointer cursor-pointer"
+															/>
+														</div>
+														{pledgeStatus.status === "REPORT_VERIFIED" && (
+															<div className="mt-6 p-6 rounded-2xl bg-blue-600/10 border border-blue-500/30 text-center space-y-4">
+																<div className="h-12 w-12 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto text-xl">📋</div>
+																<h4 className="text-lg font-black text-white uppercase tracking-tight">Report Verified</h4>
+																<p className="text-sm text-pink-100/70">The hospital has verified your blockchain report. Would you like to continue with the final pledge commitment?</p>
+																<div className="grid grid-cols-2 gap-4">
+																	<button
+																		onClick={() => handleDonorFinalize('accept')}
+																		disabled={isSubmitting}
+																		className="py-3 bg-green-600 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-green-600/30 hover:scale-[1.05] transition active:scale-95 disabled:opacity-50"
+																	>
+																		Accept & Commit ✅
+																	</button>
+																	<button
+																		onClick={() => handleDonorFinalize('reject')}
+																		disabled={isSubmitting}
+																		className="py-3 bg-red-600/20 border border-red-500/40 text-red-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-red-600 hover:text-white transition active:scale-95 disabled:opacity-50"
+																	>
+																		Reject & Delete ❌
+																	</button>
+																</div>
+															</div>
+														)}
+
+														{reportUploaded && pledgeStatus.status !== "REPORT_VERIFIED" && !showHospitalSelection && (
+															<div className="mt-6 p-6 rounded-2xl bg-green-600/10 border border-green-500/30 text-center space-y-4">
+																<div className="h-12 w-12 bg-green-500/20 rounded-full flex items-center justify-center mx-auto text-xl">✅</div>
+																<h4 className="text-lg font-black text-white uppercase tracking-tight">Report Authenticated</h4>
+																<p className="text-sm text-pink-100/70">Blockchain integrity verified successfully. You can now select hospitals to notify.</p>
+																<button
+																	onClick={() => setShowHospitalSelection(true)}
+																	className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-600/30 hover:scale-[1.02] transition active:scale-[0.98]"
+																>
+																	Continue to Hospital Selection →
+																</button>
+															</div>
+														)}
+
+														{showHospitalSelection && (
+															<div className="mt-6 space-y-6">
+																<div className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
+																	<div className="flex items-center gap-2 text-xs font-bold text-blue-400">
+																		<svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+																			<path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+																		</svg>
+																		SELECT RECIPIENT HOSPITALS
+																	</div>
+																	<p className="mt-1 text-[10px] text-pink-100/60 uppercase tracking-tight">Your verified report will be sent directly to their request queue.</p>
+																</div>
+
+																<div className="space-y-3">
+																	<div className="flex items-center justify-between">
+																		<p className="text-[10px] font-black text-pink-100/40 uppercase tracking-widest">Select Medical Centers</p>
+																		<button onClick={() => setShowHospitalSelection(false)} className="text-[10px] font-bold text-pink-100/40 hover:text-pink-100 uppercase">Back</button>
+																	</div>
+																	<div className="grid gap-2 max-h-48 overflow-y-auto pr-2">
+																		{hospitals.map((hospital) => (
+																			<label
+																				key={hospital.id}
+																				className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${selectedSendHospitals.includes(hospital.id)
+																					? "border-[#E91E63] bg-[#E91E63]/10"
+																					: "border-white/10 hover:bg-white/5"
+																					}`}
+																			>
+																				<input
+																					type="checkbox"
+																					checked={selectedSendHospitals.includes(hospital.id)}
+																					onChange={(e) => {
+																						if (e.target.checked) {
+																							setSelectedSendHospitals(prev => [...prev, hospital.id])
+																						} else {
+																							setSelectedSendHospitals(prev => prev.filter(id => id !== hospital.id))
+																						}
+																					}}
+																					className="h-4 w-4 rounded accent-[#E91E63]"
+																				/>
+																				<div className="flex-1">
+																					<p className="text-xs font-bold text-white">{hospital.name}</p>
+																					<p className="text-[9px] text-pink-100/60 uppercase">{hospital.city} • {hospital.hospital_type}</p>
+																				</div>
+																			</label>
+																		))}
+																	</div>
+																</div>
+
+																<button
+																	onClick={handleSendVerifiedReport}
+																	disabled={isSendingToHospital || selectedSendHospitals.length === 0}
+																	className="w-full py-4 bg-[#E91E63] text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-[#E91E63]/30 hover:scale-[1.02] transition active:scale-[0.98] disabled:opacity-50"
+																>
+																	{isSendingToHospital ? "Sending Securely..." : "Finalize & Send Report 🚀"}
+																</button>
+															</div>
+														)}
+													</div>
+												</div>
+											</div>
+										)}
+
+										{/* Blockchain Pledge History Section */}
+										{pledgeStatus && activeTab === "pledge" && (
+											<div className="mt-12 pt-8 border-t border-[#F6D6E3]/10">
+												<div className="mb-6">
+													<h3 className="text-xl font-bold text-white flex items-center gap-2">
+														<svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+														</svg>
+														Secure Pledge Ledger
+													</h3>
+													<p className="text-xs text-pink-100/50 mt-1">
+														Blockchain-verified record of your organ donation reports (Drafts & Final).
+													</p>
+												</div>
+
+												{pledgeHistory.length > 0 ? (
+													<div className="grid gap-4">
+														{pledgeHistory.map((item) => (
+															<div key={item.id} className="rounded-2xl border border-white/5 bg-[#1A1A2E]/50 p-5 font-mono text-[10px] transition hover:border-[#E91E63]/30">
+																<div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+																	<div className="space-y-2 flex-1">
+																		<div className="flex items-center gap-2">
+																			<span className="font-bold text-[#E91E63]">TRACKING ID:</span>
+																			<span className="text-white">{item.download_id}</span>
+																			{item.download_id.includes("DRAFT") && (
+																				<span className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 text-[8px] border border-gray-500/20">DRAFT</span>
+																			)}
+																		</div>
+																		<div className="flex items-center gap-2 opacity-60 truncate max-w-[200px] sm:max-w-md">
+																			<span className="font-bold">PDF HASH:</span>
+																			<span className="text-pink-100">{item.pdf_hash}</span>
+																		</div>
+																		<div className="flex items-center gap-2 text-green-400/70 truncate max-w-[200px] sm:max-w-md">
+																			<span className="font-bold">LEDGER HASH:</span>
+																			<span className="truncate">{item.block_hash}</span>
+																		</div>
+																	</div>
+																	<div className="flex flex-col items-start gap-2 sm:items-end sm:text-right">
+																		<span className="text-pink-100/30">{new Date(item.timestamp).toLocaleString()}</span>
+																		{item.pdf_file && (
+																			<a
+																				href={item.pdf_file}
+																				target="_blank"
+																				rel="noopener noreferrer"
+																				className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 transition"
+																			>
+																				View Document ↗
+																			</a>
+																		)}
+																	</div>
+																</div>
+															</div>
+														))}
+													</div>
+												) : (
+													<div className="rounded-2xl border border-dashed border-[#F6D6E3]/10 bg-white/[0.02] p-8 text-center">
+														<p className="text-pink-100/30">No recorded ledger entries found for your pledge.</p>
+													</div>
+												)}
+											</div>
+										)}
 
 										{pledgeStatus && pledgeStatus.status === "ACCEPTED" && !showForm && (
 											<div className="mt-8 rounded-2xl border border-yellow-500/40 bg-yellow-500/5 p-6 transition-all animate-in fade-in slide-in-from-top-4 duration-500">
@@ -744,9 +1248,12 @@ export default function OrganRegistry() {
 															<input
 																type="date"
 																value={form.date_of_birth}
-																onChange={(e) => setForm((prev) => ({ ...prev, date_of_birth: e.target.value }))}
-																className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+																readOnly
+																tabIndex="-1"
+																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+																title="Fixed from your registration details"
 															/>
+															<p className="mt-1 text-[10px] text-pink-100/40 uppercase">Fixed from Registration Profile</p>
 														</div>
 														<div>
 															<label className="block text-sm font-medium text-pink-100 mb-1">Blood Group</label>
@@ -754,9 +1261,11 @@ export default function OrganRegistry() {
 																type="text"
 																value={form.blood_group}
 																readOnly
-																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/70 outline-none cursor-not-allowed"
-																title="Managed via your Profile"
+																tabIndex="-1"
+																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+																title="Fixed from your registration details"
 															/>
+															<p className="mt-1 text-[10px] text-pink-100/40 uppercase">Fixed from Registration Profile</p>
 														</div>
 														<div>
 															<label className="block text-sm font-medium text-pink-100 mb-1">Phone</label>
@@ -764,9 +1273,11 @@ export default function OrganRegistry() {
 																type="tel"
 																value={form.phone}
 																readOnly
-																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/70 outline-none cursor-not-allowed"
-																title="Managed via your Profile"
+																tabIndex="-1"
+																className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+																title="Fixed from your registration details"
 															/>
+															<p className="mt-1 text-[10px] text-pink-100/40 uppercase">Fixed from Registration Profile</p>
 														</div>
 														<div className="sm:col-span-2">
 															<label className="block text-sm font-medium text-pink-100 mb-1">Address</label>
@@ -819,28 +1330,6 @@ export default function OrganRegistry() {
 													</div>
 												</section>
 
-												{/* Health Certificate */}
-												<section className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-6">
-													<h3 className="text-lg font-semibold text-white mb-2">Health Certificate</h3>
-													<p className="text-sm text-pink-100/70 mb-4">
-														Upload your health certificate to verify your eligibility for organ donation.
-													</p>
-													<label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 transition hover:border-[#E91E63]">
-														<input
-															type="file"
-															accept=".pdf,.jpg,.jpeg,.png"
-															onChange={(e) => setForm((prev) => ({ ...prev, health_certificate: e.target.files[0] }))}
-															className="hidden"
-														/>
-														<svg className="h-12 w-12 text-[#E91E63]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-														</svg>
-														<p className="mt-2 text-sm text-pink-100/80">
-															{form.health_certificate ? form.health_certificate.name : "Click to upload health certificate"}
-														</p>
-														<p className="mt-1 text-xs text-pink-100/60">PDF, JPG, or PNG (Max 5MB)</p>
-													</label>
-												</section>
 
 												{/* Organ Selection */}
 												<section>
@@ -1011,12 +1500,12 @@ export default function OrganRegistry() {
 														{isSubmitting ? (
 															<>
 																<span className="mr-2 h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-																{pledgeStatus ? "Updating..." : "Submitting..."}
+																Processing Secure Pledge...
 															</>
 														) : pledgeStatus ? (
 															"Update Pledge"
 														) : (
-															"Commit to Donate"
+															"Commit to Donate (Secure)"
 														)}
 													</button>
 													<button
@@ -1032,15 +1521,67 @@ export default function OrganRegistry() {
 											<div className="mt-8 space-y-6">
 												<div className="rounded-3xl border border-[#E91E63]/50 bg-gradient-to-br from-[#1A1A2E] to-[#131326] p-6 shadow-[0_20px_45px_rgba(233,30,99,0.25)]">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Current Status</p>
-													<h3 className="mt-3 text-3xl font-bold text-white">PLEDGED</h3>
+													<h3 className="mt-3 text-3xl font-bold text-white uppercase tracking-tighter">
+														{pledgeStatus.status === 'ACCEPTED' ? 'PLEDGE ACCEPTED' :
+															pledgeStatus.status === 'REJECTED' ? 'PLEDGE REJECTED' :
+																pledgeStatus.status === 'COMPLETED' ? 'PLEDGE FULFILLED' :
+																	'PLEDGED'}
+													</h3>
 													<p className="mt-2 text-sm text-pink-100/80">
-														Thank you for the hope you've registered. Hospitals will reference this pledge with your family's consent.
+														{pledgeStatus.status === 'ACCEPTED'
+															? "A medical center has reviewed and accepted your selfless pledge. Thank you for your commitment to saving lives."
+															: pledgeStatus.status === 'REJECTED'
+																? "The hospital has reviewed your report but could not accept it at this time. You can review your details and try again."
+																: pledgeStatus.status === 'COMPLETED'
+																	? "This pledge has been fulfilled. The donor has given the ultimate gift of life. Thank you."
+																	: "Thank you for the hope you've registered. Hospitals will reference this pledge with your family's consent."
+														}
 													</p>
+													{pledgeStatus.status === 'ACCEPTED' && pledgeStatus.hospital_message && (
+														<div className="mt-4 p-4 rounded-2xl bg-white/5 border border-white/10 italic text-sm text-pink-100/90">
+															<p className="text-[10px] uppercase font-bold text-pink-100/40 not-italic mb-2 tracking-widest">Message from Hospital</p>
+															"{pledgeStatus.hospital_message}"
+														</div>
+													)}
+													{pledgeStatus.status === 'REJECTED' && (
+														<div className="mt-6 flex gap-4">
+															<button
+																onClick={resetForm}
+																className="rounded-xl bg-[#E91E63] px-6 py-2 text-xs font-bold text-white uppercase tracking-widest"
+															>
+																Re-Pledge Now
+															</button>
+														</div>
+													)}
 													<div className="mt-6 grid gap-4 sm:grid-cols-2">
 														<div className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-4">
 															<p className="text-xs uppercase tracking-wide text-pink-100/50">Organs Registered</p>
 															<p className="mt-2 text-base font-medium text-white">{pledgeOrgansDisplay}</p>
 														</div>
+														{pledgeStatus?.pledge_report && (
+															<div className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-4 sm:col-span-2">
+																<p className="text-xs uppercase tracking-wide text-pink-100/50">Secure Details</p>
+																<div className="mt-2 flex items-center justify-between">
+																	<span className="flex items-center gap-2 rounded-full bg-green-500/20 px-3 py-1 text-xs font-semibold text-green-400">
+																		<svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+																		</svg>
+																		Blockchain Verified
+																	</span>
+																	<a
+																		href={pledgeStatus.pledge_report}
+																		target="_blank"
+																		rel="noopener noreferrer"
+																		className="flex items-center text-sm font-medium text-[#E91E63] hover:text-[#D81B60]"
+																	>
+																		<svg className="mr-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+																		</svg>
+																		Download Secure Report
+																	</a>
+																</div>
+															</div>
+														)}
 														<div className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-4">
 															<p className="text-xs uppercase tracking-wide text-pink-100/50">Pledge Date</p>
 															<p className="mt-2 text-base font-medium text-white">
@@ -1062,6 +1603,26 @@ export default function OrganRegistry() {
 																<p className="mt-2 text-base font-medium text-[#E91E63]">Registered</p>
 															</div>
 														)}
+													</div>
+
+													<div className="mt-8 flex flex-col gap-4">
+														<button
+															onClick={() => setIsEditing(true)}
+															className="w-full rounded-2xl bg-[#E91E63] py-4 text-sm font-bold text-white shadow-lg transition hover:bg-[#D81B60] uppercase tracking-widest"
+														>
+															Modify Pledge
+														</button>
+
+														<button
+															onClick={() => {
+																if (confirm("Are you sure you want to cancel your organ donor pledge? This will remove your record from our registry.")) {
+																	handleCancelPledge();
+																}
+															}}
+															className="w-full rounded-2xl border border-red-500/30 py-4 text-sm font-bold text-red-400 transition hover:bg-red-500/10 uppercase tracking-widest"
+														>
+															Cancel Pledge
+														</button>
 													</div>
 												</div>
 											</div>
@@ -1125,8 +1686,10 @@ export default function OrganRegistry() {
 														type="text"
 														required
 														value={deceasedForm.requester_name}
-														onChange={(e) => setDeceasedForm((prev) => ({ ...prev, requester_name: e.target.value }))}
-														className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+														readOnly
+														tabIndex="-1"
+														className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+														title="Auto-filled from your profile"
 													/>
 												</div>
 												<div>
@@ -1135,8 +1698,10 @@ export default function OrganRegistry() {
 														type="tel"
 														required
 														value={deceasedForm.requester_phone}
-														onChange={(e) => setDeceasedForm((prev) => ({ ...prev, requester_phone: e.target.value }))}
-														className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+														readOnly
+														tabIndex="-1"
+														className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+														title="Auto-filled from your profile"
 													/>
 												</div>
 												<div>
@@ -1144,8 +1709,10 @@ export default function OrganRegistry() {
 													<input
 														type="email"
 														value={deceasedForm.requester_email}
-														onChange={(e) => setDeceasedForm((prev) => ({ ...prev, requester_email: e.target.value }))}
-														className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
+														readOnly
+														tabIndex="-1"
+														className="w-full rounded-lg border border-[#F6D6E3]/30 bg-[#131326] px-3 py-2 text-white/50 outline-none cursor-not-allowed select-none"
+														title="Auto-filled from your profile"
 													/>
 												</div>
 												<div>
@@ -1402,6 +1969,60 @@ export default function OrganRegistry() {
 											)}
 										</button>
 									</form>
+
+									{myDeceasedRequests.length > 0 && (
+										<div className="mt-8">
+											<h3 className="text-xl font-bold text-white mb-4">My Requests</h3>
+											<div className="space-y-4">
+												{myDeceasedRequests.map(req => (
+													<div key={req.id} className="rounded-xl border border-[#F6D6E3]/20 bg-[#1A1A2E] p-4 flex justify-between items-center">
+														<div>
+															<p className="font-semibold text-white">{req.deceased_name}</p>
+															<p className="text-sm text-pink-100/70">
+																Status: <span className={`font-bold ${req.status === 'APPROVED' ? 'text-green-400' : req.status === 'CANCELLED' ? 'text-red-400' : 'text-yellow-400'}`}>{req.status}</span>
+															</p>
+															<p className="text-xs text-pink-100/50">Submitted: {new Date(req.created_at).toLocaleDateString()}</p>
+														</div>
+														{["PENDING"].includes(req.status) && (
+															<button
+																onClick={() => handleDeceasedCancel(req.id)}
+																className="text-xs text-red-400 hover:text-red-300 underline"
+															>
+																Cancel Request
+															</button>
+														)}
+
+														{req.status === "APPROVED" && (
+															<div className="flex flex-col gap-2 items-end">
+																<div className="text-right">
+																	<p className="text-xs font-bold text-green-400 uppercase tracking-widest animate-pulse">
+																		🚑 Ambulance Dispatched
+																	</p>
+																	<p className="text-[10px] text-pink-100/70">
+																		From: {req.hospital_name || "Assigned Hospital"}
+																	</p>
+																</div>
+																<div className="flex gap-2">
+																	<button
+																		onClick={() => handleConfirmAmbulance(req.id)}
+																		className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-green-700 shadow-lg shadow-green-900/20"
+																	>
+																		Confirm Arrival
+																	</button>
+																	<button
+																		onClick={() => handleDeceasedCancel(req.id)}
+																		className="rounded-lg border border-red-500/30 px-3 py-1.5 text-xs font-bold text-red-400 hover:bg-red-500/10"
+																	>
+																		Decline
+																	</button>
+																</div>
+															</div>
+														)}
+													</div>
+												))}
+											</div>
+										</div>
+									)}
 								</div>
 							)}
 

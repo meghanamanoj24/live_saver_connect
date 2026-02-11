@@ -13,6 +13,7 @@ export default function HospitalDashboard() {
 
 	// Donation Requests
 	const [donationRequests, setDonationRequests] = useState([])
+	const [ambulanceRequests, setAmbulanceRequests] = useState([])
 
 	// Hospital Needs
 	const [hospitalNeeds, setHospitalNeeds] = useState([])
@@ -62,6 +63,14 @@ export default function HospitalDashboard() {
 		notes: ""
 	})
 
+	// Organ Intake Modal State
+	const [intakeModal, setIntakeModal] = useState({
+		isOpen: false,
+		donorId: null,
+		donorName: "",
+		paymentAmount: "",
+	})
+
 	useEffect(() => {
 		if (id) {
 			loadHospitalData()
@@ -89,6 +98,7 @@ export default function HospitalDashboard() {
 				loadWillingDonors(),
 				loadOrganDonors(),
 				loadEvents(hospitalData.id),
+				loadAmbulanceRequests(),
 			])
 		} catch (error) {
 			console.error("Error loading hospital data:", error)
@@ -111,6 +121,7 @@ export default function HospitalDashboard() {
 						loadWillingDonors(),
 						loadOrganDonors(),
 						loadEvents(hospitalId),
+						loadAmbulanceRequests(),
 					])
 				} else {
 					// If no stored hospital, try to load requests with URL ID
@@ -210,6 +221,15 @@ export default function HospitalDashboard() {
 			setHospitalNeeds(data)
 		} catch (error) {
 			setHospitalNeeds([])
+		}
+	}
+
+	async function loadAmbulanceRequests() {
+		try {
+			const data = await apiFetch("/ambulance-requests/")
+			setAmbulanceRequests(data)
+		} catch (error) {
+			setAmbulanceRequests([])
 		}
 	}
 
@@ -532,6 +552,45 @@ export default function HospitalDashboard() {
 		}
 	}
 
+	async function handleVerifyOrganPledge(donorId, reportFileUrl) {
+		if (!reportFileUrl) {
+			alert("No report file available for verification.")
+			return
+		}
+
+		try {
+			// Trigger hospital-side verification and acceptance on the backend
+			const response = await apiFetch(`/organ-donors/${donorId}/verify_and_accept/`, {
+				method: "POST"
+			})
+
+			if (response.blockchain_record) {
+				alert(`Verification Success!\n\nBlockchain Track ID: ${response.blockchain_record.download_id}\nHash: ${response.blockchain_record.pdf_hash}\n\nThis report is authentic.`);
+			} else {
+				alert("Verified locally, but blockchain sync is pending.");
+			}
+			loadOrganDonors();
+		} catch (error) {
+			console.error("Verification error:", error)
+			alert("Blockchain verification FAILED. The report content does not match our integrity ledger.")
+		}
+	}
+
+	async function handleReceiveBody(donorId, paymentAmount) {
+		try {
+			await apiFetch(`/organ-donors/${donorId}/receive_body/`, {
+				method: "POST",
+				body: JSON.stringify({ payment_amount: paymentAmount })
+			})
+			alert("Body receipt and payment recorded successfully. Record moved to Completed Donors.")
+			setIntakeModal({ isOpen: false, donorId: null, donorName: "", paymentAmount: "" })
+			loadOrganDonors()
+		} catch (error) {
+			console.error("Error recording body receipt:", error)
+			alert("Failed to record body receipt. Please try again.")
+		}
+	}
+
 	if (loading) {
 		return (
 			<main className="min-h-screen bg-[#1A1A2E] text-white flex items-center justify-center">
@@ -653,8 +712,15 @@ export default function HospitalDashboard() {
 								</div>
 								<div className="flex items-center gap-3">
 									<span className="rounded-full bg-[#E91E63]/20 px-3 py-1 text-sm text-[#E91E63]">
-										{pendingRequests.length} Pending
+										{pendingRequests.length} Donation Pending
 									</span>
+									{ambulanceRequests.filter(a => a.status === 'PENDING').length > 0 && (
+										<Link href={`/hospital/requests?id=${id}`} legacyBehavior>
+											<a className="rounded-full bg-red-600 px-3 py-1 text-sm text-white font-bold animate-pulse">
+												🚨 {ambulanceRequests.filter(a => a.status === 'PENDING').length} Emergency
+											</a>
+										</Link>
+									)}
 									<button
 										onClick={() => {
 											const hospitalId = hospital?.id || id
@@ -700,6 +766,21 @@ export default function HospitalDashboard() {
 														</div>
 														<p className="mt-1 text-sm text-pink-100/70">Email: {donor.email || "Not provided"}</p>
 														{request.message && <p className="mt-2 text-sm text-pink-100/80">{request.message}</p>}
+														{request.health_report && (
+															<div className="mt-2">
+																<a
+																	href={request.health_report}
+																	target="_blank"
+																	rel="noopener noreferrer"
+																	className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/5 px-2 py-1 text-[10px] font-bold text-blue-300 hover:bg-blue-500/10 transition"
+																>
+																	<svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+																	</svg>
+																	View Health Report
+																</a>
+															</div>
+														)}
 														<p className="mt-2 text-xs text-pink-100/60">
 															Requested: {new Date(request.created_at || Date.now()).toLocaleString()}
 														</p>
@@ -753,6 +834,64 @@ export default function HospitalDashboard() {
 									<p className="text-xs text-pink-100/50 mt-2">Make sure requests are being sent to this hospital (ID: {hospital?.id || id})</p>
 								</div>
 							)}
+
+							{/* NEW: Organ Pledges Section for Hospital to Verify */}
+							<div className="mt-12 space-y-6">
+								<h2 className="text-2xl font-bold text-white flex items-center gap-3">
+									<span className="p-2 bg-[#E91E63]/20 rounded-lg">🫀</span>
+									New Organ Pledges for Verification
+								</h2>
+								{organDonors.filter(d => d.status === "PENDING" || d.status === "ACCEPTED").length > 0 ? (
+									<div className="grid gap-4">
+										{organDonors.filter(d => d.status === "PENDING" || d.status === "ACCEPTED").map((donor) => (
+											<div key={donor.id} className="rounded-xl border border-blue-500/30 bg-[#131326] p-6 shadow-lg shadow-blue-500/5">
+												<div className="flex items-start justify-between">
+													<div>
+														<h3 className="text-lg font-bold text-white">
+															{donor.user?.first_name || donor.user?.username || "Donor"} {donor.user?.last_name || ""}
+														</h3>
+														<p className="text-sm text-pink-100/70 mt-1">Organs: <span className="text-blue-400 font-bold">{donor.organs}</span></p>
+														<div className="mt-4 flex flex-wrap gap-4">
+															{donor.pledge_report && (
+																<a
+																	href={donor.pledge_report}
+																	target="_blank"
+																	rel="noopener noreferrer"
+																	className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600/10 border border-blue-500/30 rounded-lg text-blue-300 text-sm hover:bg-blue-600/20 transition"
+																>
+																	<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+																	</svg>
+																	View Signed Report
+																</a>
+															)}
+															<button
+																onClick={() => handleVerifyOrganPledge(donor.id, donor.pledge_report)}
+																className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 rounded-lg text-white text-sm font-bold shadow-lg shadow-green-600/20 hover:opacity-90 transition"
+															>
+																<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																	<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+																</svg>
+																Verify Blockchain Integrity
+															</button>
+														</div>
+													</div>
+													<div className="text-right">
+														<span className="inline-block px-3 py-1 rounded-full bg-yellow-500/10 text-yellow-400 text-xs font-black uppercase tracking-widest border border-yellow-500/20">
+															{donor.status}
+														</span>
+														<p className="text-[10px] text-pink-100/40 mt-2 uppercase tracking-tighter">Awaiting Hospital Approval</p>
+													</div>
+												</div>
+											</div>
+										))}
+									</div>
+								) : (
+									<div className="rounded-xl border border-dashed border-[#F6D6E3]/20 bg-white/5 p-8 text-center">
+										<p className="text-pink-100/40">No new organ pledges to verify.</p>
+									</div>
+								)}
+							</div>
 						</div>
 					)}
 
@@ -1115,22 +1254,75 @@ export default function HospitalDashboard() {
 								</div>
 							</div>
 
-							{/* Organ Donors */}
-							<div className="mt-8">
-								<h3 className="text-xl font-semibold text-white mb-4">Organ Donors</h3>
-								<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-									{organDonors.map((donor) => (
-										<div key={donor.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
-											<h4 className="font-semibold text-white">
-												{donor.user?.first_name || donor.user?.username || "Donor"} {donor.user?.last_name || ""}
-											</h4>
-											<p className="mt-2 text-sm text-pink-100/70">Organs: {donor.organs}</p>
-											<p className="mt-1 text-sm text-pink-100/70">City: {donor.city}</p>
-											{donor.consent_provided && (
-												<span className="mt-2 inline-block rounded bg-green-500/10 px-2 py-1 text-xs text-green-300">
-													Consent Provided
-												</span>
-											)}
+							{/* Organ Requests / Pledges */}
+							<div className="mt-12">
+								<h3 className="text-xl font-bold text-white mb-6 flex items-center gap-3">
+									<span className="p-2 bg-blue-500/20 rounded-lg">🫁</span>
+									Organ Fulfillment Requests
+								</h3>
+								<div className="grid gap-6">
+									{organDonors.filter(d => d.status === "COMMITTED" || d.status === "COMPLETED").map((donor) => (
+										<div key={donor.id} className={`rounded-2xl border ${donor.status === 'COMPLETED' ? 'border-green-500/30 bg-green-500/5' : 'border-blue-500/30 bg-[#131326]'} p-6 transition-all`}>
+											<div className="flex flex-col md:flex-row justify-between gap-6">
+												<div className="space-y-3">
+													<div className="flex items-center gap-3">
+														<h4 className="text-xl font-black text-white">
+															{donor.user?.first_name || donor.user?.username || "Donor"} {donor.user?.last_name || ""}
+														</h4>
+														<span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest border ${donor.status === 'COMPLETED' ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
+															{donor.status}
+														</span>
+													</div>
+													<div className="grid grid-cols-2 gap-4 text-sm">
+														<div>
+															<p className="text-pink-100/40 uppercase text-[10px] font-bold">Organs Committed</p>
+															<p className="text-blue-300 font-bold">{donor.organs}</p>
+														</div>
+														<div>
+															<p className="text-pink-100/40 uppercase text-[10px] font-bold">Contact Person</p>
+															<p className="text-white font-medium">{donor.emergency_contact_name || "N/A"}</p>
+															<p className="text-xs text-pink-100/60">{donor.emergency_contact_phone}</p>
+														</div>
+													</div>
+													{donor.status === "COMPLETED" && (
+														<div className="mt-4 p-4 rounded-xl bg-green-500/10 border border-green-500/20 grid grid-cols-2 gap-4">
+															<div>
+																<p className="text-green-400/60 uppercase text-[10px] font-bold">Body Received At</p>
+																<p className="text-white text-sm">{new Date(donor.body_received_at).toLocaleString()}</p>
+															</div>
+															<div>
+																<p className="text-green-400/60 uppercase text-[10px] font-bold">Payment Status</p>
+																<p className="text-white text-sm font-bold">Rs. {donor.payment_amount} Paid ✅</p>
+															</div>
+														</div>
+													)}
+												</div>
+												<div className="flex flex-col gap-3 justify-center">
+													{donor.status === "COMMITTED" && (
+														<button
+															onClick={() => setIntakeModal({
+																isOpen: true,
+																donorId: donor.id,
+																donorName: `${donor.user?.first_name || donor.user?.username} ${donor.user?.last_name || ""}`,
+																paymentAmount: "50000" // Default organ benefit amount
+															})}
+															className="w-full md:w-auto px-6 py-3 bg-[#E91E63] text-white font-black text-xs uppercase tracking-widest rounded-xl shadow-lg shadow-[#E91E63]/30 hover:scale-105 transition active:scale-95"
+														>
+															HAD RECEIVED THE BODY 📍
+														</button>
+													)}
+													{donor.pledge_report && (
+														<a
+															href={donor.pledge_report}
+															target="_blank"
+															rel="noopener noreferrer"
+															className="text-center text-xs text-blue-400 border-b border-blue-400/30 pb-1 hover:text-blue-300 transition"
+														>
+															Download Blockchain Certificate
+														</a>
+													)}
+												</div>
+											</div>
 										</div>
 									))}
 								</div>
@@ -1215,6 +1407,68 @@ export default function HospitalDashboard() {
 						</div>
 					)}
 				</div>
+
+				{/* Organ Intake / Fulfillment Modal */}
+				{intakeModal.isOpen && (
+					<div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+						<div className="w-full max-w-lg rounded-3xl border border-[#F6D6E3]/30 bg-[#131326] p-8 shadow-2xl">
+							<div className="mb-6 flex items-center gap-4">
+								<div className="h-12 w-12 rounded-2xl bg-[#E91E63]/20 flex items-center justify-center text-2xl">📍</div>
+								<div>
+									<h3 className="text-xl font-black text-white uppercase tracking-tight">Receive Body & Finalize</h3>
+									<p className="text-sm text-pink-100/60">Recording reception for <b>{intakeModal.donorName}</b></p>
+								</div>
+							</div>
+
+							<div className="space-y-6">
+								<div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+									<p className="text-[10px] font-black text-pink-100/40 uppercase tracking-widest mb-4">Verification Checklist</p>
+									<div className="space-y-3">
+										<div className="flex items-center gap-3 text-sm text-white">
+											<div className="h-5 w-5 rounded bg-green-500 flex items-center justify-center text-[10px]">✓</div>
+											Blockchain Identity Verified
+										</div>
+										<div className="flex items-center gap-3 text-sm text-white">
+											<div className="h-5 w-5 rounded bg-green-500 flex items-center justify-center text-[10px]">✓</div>
+											Signed Pledge Artifact Matched
+										</div>
+										<div className="flex items-center gap-3 text-sm text-white">
+											<input type="checkbox" className="h-5 w-5 rounded bg-[#1A1A2E] border-white/20" defaultChecked />
+											Family Consent Authenticated
+										</div>
+									</div>
+								</div>
+
+								<div>
+									<label className="block text-[10px] font-black text-pink-100/40 uppercase tracking-widest mb-2">Compensation to Contact (Rs.)</label>
+									<input
+										type="number"
+										value={intakeModal.paymentAmount}
+										onChange={(e) => setIntakeModal({ ...intakeModal, paymentAmount: e.target.value })}
+										className="w-full rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] px-4 py-3 text-white font-bold outline-none focus:border-[#E91E63] transition"
+										placeholder="Enter amount"
+									/>
+									<p className="mt-2 text-[10px] text-pink-100/40 italic">* This payment will be recorded as 'Transferred to Emergency Contact' in the final ledger.</p>
+								</div>
+
+								<div className="flex gap-4 pt-4">
+									<button
+										onClick={() => setIntakeModal({ ...intakeModal, isOpen: false })}
+										className="flex-1 rounded-xl border border-white/10 py-3 text-xs font-black uppercase text-pink-100/60 hover:bg-white/5 transition"
+									>
+										Cancel
+									</button>
+									<button
+										onClick={() => handleReceiveBody(intakeModal.donorId, intakeModal.paymentAmount)}
+										className="flex-[2] rounded-xl bg-green-600 py-3 text-xs font-black uppercase text-white shadow-lg shadow-green-600/30 hover:bg-green-500 transition active:scale-95"
+									>
+										CONFIRM RECEPTION & PAY 💳
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				)}
 			</main >
 		</>
 	)

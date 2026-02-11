@@ -225,14 +225,12 @@ export default function ProfileDashboard() {
 											<button
 												type="button"
 												onClick={() => setEmergencyAvailable((v) => !v)}
-												className={`relative inline-flex h-7 w-12 items-center rounded-full transition ${
-													emergencyAvailable ? "bg-emerald-500" : "bg-gray-300"
-												}`}
+												className={`relative inline-flex h-7 w-12 items-center rounded-full transition ${emergencyAvailable ? "bg-emerald-500" : "bg-gray-300"
+													}`}
 											>
 												<span
-													className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
-														emergencyAvailable ? "translate-x-6" : "translate-x-1"
-													}`}
+													className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${emergencyAvailable ? "translate-x-6" : "translate-x-1"
+														}`}
 												/>
 											</button>
 										</div>

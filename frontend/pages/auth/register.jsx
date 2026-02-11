@@ -14,6 +14,7 @@ export default function Register() {
     const [bloodGroup, setBloodGroup] = useState("")
     const [gender, setGender] = useState("")
     const [phone, setPhone] = useState("")
+    const [dateOfBirth, setDateOfBirth] = useState("")
     const [donorModule, setDonorModule] = useState("")
 
     const [isLoading, setIsLoading] = useState(false)
@@ -36,7 +37,7 @@ export default function Register() {
         e.preventDefault()
         setError("")
 
-        if (!email || !firstName || !lastName || !donorModule || !phone) {
+        if (!email || !firstName || !lastName || !donorModule || !phone || !dateOfBirth) {
             setError("Please fill in all required fields.")
             return
         }
@@ -86,6 +87,7 @@ export default function Register() {
                     blood_group: bloodGroup,
                     gender: gender,
                     phone: phone,
+                    date_of_birth: dateOfBirth,
                     donor_module: donorModule
                 }),
             })
@@ -232,6 +234,17 @@ export default function Register() {
                             className="inputStyle"
                             placeholder="Phone Number"
                         />
+
+                        <div className="text-left px-1">
+                            <label className="text-xs font-semibold text-pink-100/60 mb-1 block">Date of Birth</label>
+                            <input
+                                type="date"
+                                required
+                                value={dateOfBirth}
+                                onChange={(e) => setDateOfBirth(e.target.value)}
+                                className="inputStyle"
+                            />
+                        </div>
 
                         <select
                             value={donorModule}

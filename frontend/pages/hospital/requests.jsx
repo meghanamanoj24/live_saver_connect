@@ -11,6 +11,8 @@ export default function HospitalRequests() {
 	const [hospital, setHospital] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
 	const [organPledges, setOrganPledges] = useState([])
+	const [deceasedRequests, setDeceasedRequests] = useState([])
+	const [ambulanceRequests, setAmbulanceRequests] = useState([])
 	const [loading, setLoading] = useState(true)
 	const [activeTab, setActiveTab] = useState("BLOOD")
 	const [selectedRequest, setSelectedRequest] = useState(null)
@@ -34,7 +36,9 @@ export default function HospitalRequests() {
 			setHospital(hospitalData)
 			await Promise.all([
 				loadDonationRequests(hospitalData.id || id),
-				loadOrganPledges()
+				loadOrganPledges(),
+				loadDeceasedRequests(hospitalData.id || id),
+				loadAmbulanceRequests()
 			])
 		} catch (error) {
 			console.error("Error loading data:", error)
@@ -60,6 +64,26 @@ export default function HospitalRequests() {
 		} catch (error) {
 			console.error("Error loading organ pledges:", error)
 			setOrganPledges([])
+		}
+	}
+
+	async function loadDeceasedRequests(hospitalId) {
+		try {
+			const data = await apiFetch(`/deceased-donor-requests/?hospital=${hospitalId}`)
+			setDeceasedRequests(data)
+		} catch (error) {
+			console.error("Error loading deceased donor requests:", error)
+			setDeceasedRequests([])
+		}
+	}
+
+	async function loadAmbulanceRequests() {
+		try {
+			const data = await apiFetch("/ambulance-requests/")
+			setAmbulanceRequests(data)
+		} catch (error) {
+			console.error("Error loading ambulance requests:", error)
+			setAmbulanceRequests([])
 		}
 	}
 
@@ -123,12 +147,87 @@ export default function HospitalRequests() {
 			})
 			await loadOrganPledges()
 			alert("Pledge accepted and message sent to donor!")
+			router.push("/register/organ")
 		} catch (error) {
 			alert("Error accepting pledge: " + error.message)
 		}
 	}
 
-	// Inline generatePledgeReport removed in favor of shared utility
+	async function handleVerifyOrganPledge(donorId, reportFileUrl) {
+		if (!reportFileUrl) {
+			alert("No report file available for verification.")
+			return
+		}
+
+		try {
+			// Trigger hospital-side verification on the backend
+			const response = await apiFetch(`/organ-donors/${donorId}/hospital_verify/`, {
+				method: "POST",
+				body: JSON.stringify({ decision: 'verify' })
+			})
+
+			if (response.blockchain_record) {
+				alert(`Verification Success!\n\nBlockchain ID: ${response.blockchain_record.download_id}\nTimestamp: ${new Date(response.blockchain_record.timestamp).toLocaleString()}\nHash: ${response.blockchain_record.pdf_hash}\n\nThis report is authentic. Waiting for donor's final confirmation.`);
+			} else {
+				alert("Report verified. Waiting for donor's final confirmation.");
+			}
+			loadOrganPledges()
+		} catch (error) {
+			console.error("Verification error:", error)
+			alert("Blockchain verification FAILED. The report content does not match our integrity ledger.")
+		}
+	}
+
+	async function handleRejectOrganPledge(donorId) {
+		if (!confirm("Are you sure you want to REJECT this report? This will delete the pledge and the donor will have to start over.")) return
+
+		try {
+			await apiFetch(`/organ-donors/${donorId}/hospital_verify/`, {
+				method: "POST",
+				body: JSON.stringify({ decision: 'reject' })
+			})
+			alert("Pledge report rejected.")
+			loadOrganPledges()
+		} catch (error) {
+			alert("Error rejecting pledge: " + error.message)
+		}
+	}
+
+	async function handleProcessDeceasedRequest(requestId, decision) {
+		const notes = decision === "REJECTED" ? prompt("Enter reason for rejection:") : "";
+		if (decision === "REJECTED" && !notes) return;
+
+		try {
+			await apiFetch(`/deceased-donor-requests/${requestId}/process_request/`, {
+				method: "POST",
+				body: JSON.stringify({ decision, notes })
+			})
+			alert(`Request ${decision.toLowerCase()} successfully!`)
+			loadDeceasedRequests(hospital?.id || id)
+		} catch (error) {
+			alert("Error processing request: " + error.message)
+		}
+	}
+
+	async function handleAcceptAmbulance(requestId) {
+		try {
+			await apiFetch(`/ambulance-requests/${requestId}/accept/`, { method: "POST" })
+			alert("Ambulance dispatched!")
+			loadAmbulanceRequests()
+		} catch (error) {
+			alert("Error: " + error.message)
+		}
+	}
+
+	async function handleCompleteAmbulance(requestId) {
+		try {
+			await apiFetch(`/ambulance-requests/${requestId}/complete/`, { method: "POST" })
+			alert("Life Saved! Reward issued to reporter.")
+			loadAmbulanceRequests()
+		} catch (error) {
+			alert("Error: " + error.message)
+		}
+	}
 
 	if (loading) {
 		return (
@@ -147,7 +246,7 @@ export default function HospitalRequests() {
 	const acceptedRequests = filteredRequests.filter(r => r.status === "ACCEPTED")
 	const rejectedRequests = filteredRequests.filter(r => r.status === "REJECTED")
 
-	const activeOrganPledges = activeTab === "ORGAN" ? organPledges.filter(p => p.status === "PENDING" || p.status === "ACCEPTED" || p.status === "CANCELLED") : []
+	const activeOrganPledges = activeTab === "ORGAN" ? organPledges.filter(p => p.status === "PENDING" || p.status === "ACCEPTED" || p.status === "COMMITTED" || p.status === "CANCELLED" || p.status === "REJECTED" || p.status === "REPORT_VERIFIED") : []
 
 	return (
 		<>
@@ -176,14 +275,14 @@ export default function HospitalRequests() {
 				<div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
 					{/* Tabs */}
 					<div className="mb-8 flex border-b border-[#F6D6E3]/20 overflow-x-auto">
-						{["BLOOD", "PLATELETS", "ORGAN"].map((tab) => (
+						{["BLOOD", "PLATELETS", "ORGAN", "AMBULANCE"].map((tab) => (
 							<button
 								key={tab}
 								onClick={() => setActiveTab(tab)}
 								className={`px-6 py-4 text-sm font-semibold transition-all relative whitespace-nowrap ${activeTab === tab ? "text-[#E91E63]" : "text-pink-100/60 hover:text-pink-100"
 									}`}
 							>
-								{tab === "BLOOD" ? "Blood Request" : tab === "COMPLETED" ? "Completed Donors" : `${tab.charAt(0) + tab.slice(1).toLowerCase()} Requests`}
+								{tab === "BLOOD" ? "Blood Request" : tab === "AMBULANCE" ? "🚨 Ambulance" : tab === "COMPLETED" ? "Completed Donors" : `${tab.charAt(0) + tab.slice(1).toLowerCase()} Requests`}
 								{activeTab === tab && (
 									<div className="absolute bottom-0 left-0 w-full h-0.5 bg-[#E91E63]" />
 								)}
@@ -213,8 +312,9 @@ export default function HospitalRequests() {
 								const statusColors = {
 									PENDING: "bg-yellow-600/20 text-yellow-400",
 									ACCEPTED: "bg-green-600/20 text-green-400",
+									REPORT_VERIFIED: "bg-blue-600/20 text-blue-400",
 									REJECTED: "bg-red-600/20 text-red-400",
-									COMPLETED: "bg-blue-600/20 text-blue-400",
+									COMPLETED: "bg-indigo-600/20 text-indigo-400",
 								}
 								const statusColor = statusColors[request.status] || "bg-gray-600/20 text-gray-400"
 
@@ -287,76 +387,231 @@ export default function HospitalRequests() {
 							})
 						)}
 
-						{activeTab === "ORGAN" && activeOrganPledges.length > 0 && (
-							<div className="mt-12">
-								<h2 className="text-xl font-bold text-white mb-6 uppercase tracking-wider flex items-center gap-2">
-									<span className="h-2 w-2 rounded-full bg-[#E91E63]" />
-									Living Organ Pledges (Donor Initiated)
-								</h2>
+						{activeTab === "ORGAN" && (
+							<>
 								<div className="space-y-4">
-									{activeOrganPledges.map((pledge) => (
-										<div key={pledge.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6">
-											<div className="flex items-start justify-between">
-												<div className="flex-1">
-													<div className="flex items-center gap-3 mb-2">
-														<h3 className="text-lg font-semibold text-white">
-															{pledge.user?.first_name || pledge.user?.username} {pledge.user?.last_name || ""}
-														</h3>
-														<span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${pledge.status === 'ACCEPTED' ? 'bg-green-600/20 text-green-400' :
-															pledge.status === 'CANCELLED' ? 'bg-red-600/20 text-red-400' :
-																'bg-yellow-600/20 text-yellow-400'
-															}`}>
-															{pledge.status}
-														</span>
-													</div>
-													<p className="text-sm text-pink-100/70">
-														Pledged: <span className="text-white font-medium">{pledge.organs || "Organs"}</span>
-													</p>
-													<div className="mt-4 grid gap-4 text-xs text-pink-100/60 sm:grid-cols-2">
-														<div>
-															<p className="font-semibold text-pink-100/80 mb-1">Donor Details</p>
-															<p>Blood Group: {pledge.blood_group || "N/A"}</p>
-															<p>Phone: {pledge.phone || "N/A"}</p>
+									{activeOrganPledges.length === 0 ? (
+										<div className="text-center py-12 rounded-xl bg-[#131326] border border-[#F6D6E3]/20 border-dashed">
+											<p className="text-pink-100/50">No organ requests found.</p>
+										</div>
+									) : (
+										activeOrganPledges.map((pledge) => (
+											<div key={pledge.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6 shadow-lg shadow-blue-500/5">
+												<div className="flex items-start justify-between">
+													<div className="flex-1">
+														<div className="flex items-center gap-3 mb-2">
+															<h3 className="text-lg font-semibold text-white">
+																{pledge.user?.first_name || pledge.user?.username} {pledge.user?.last_name || ""}
+															</h3>
+															<span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${pledge.status === 'ACCEPTED' || pledge.status === 'REPORT_VERIFIED' || pledge.status === 'COMMITTED' ? 'bg-green-600/20 text-green-400' :
+																pledge.status === 'CANCELLED' || pledge.status === 'REJECTED' ? 'bg-red-600/20 text-red-400' :
+																	'bg-yellow-600/20 text-yellow-400'
+																}`}>
+																{pledge.status}
+															</span>
 														</div>
-														<div>
-															<p className="font-semibold text-pink-100/80 mb-1">Emergency Contact</p>
-															<p>{pledge.emergency_contact_name} ({pledge.emergency_contact_phone})</p>
-															<p>Relation: {pledge.emergency_contact_relation}</p>
+														<p className="text-sm text-pink-100/70">
+															Pledged Organs: <span className="text-blue-400 font-bold uppercase">{pledge.organs || "Internal Organs"}</span>
+														</p>
+														<div className="mt-4 grid gap-4 text-xs text-pink-100/60 sm:grid-cols-2">
+															<div>
+																<p className="font-semibold text-pink-100/80 mb-1">Donor Profile</p>
+																<p>Blood Group: <span className="text-white">{pledge.blood_group || "N/A"}</span></p>
+																<p>Contact: {pledge.phone || "N/A"}</p>
+															</div>
+															<div>
+																<p className="font-semibold text-pink-100/80 mb-1">Emergency Beneficiary</p>
+																<p>{pledge.emergency_contact_name} ({pledge.emergency_contact_phone})</p>
+																<p>Relation: {pledge.emergency_contact_relation}</p>
+															</div>
 														</div>
+														{pledge.pledge_report && (
+															<div className="mt-4 flex items-center gap-3">
+																<span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
+																	<svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+																	</svg>
+																</span>
+																<div>
+																	<p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">Verified Report Attached</p>
+																	<a
+																		href={pledge.pledge_report}
+																		target="_blank"
+																		rel="noopener noreferrer"
+																		className="text-xs font-semibold text-white underline hover:text-blue-300 transition"
+																	>
+																		View Secure Pledge Report (PDF)
+																	</a>
+																</div>
+															</div>
+														)}
 													</div>
-												</div>
-												<div className="flex flex-col gap-2 ml-4">
-													{pledge.status === "PENDING" && (
-														<>
-															<button
-																onClick={() => generatePledgeReport(pledge)}
-																className="w-full rounded-lg bg-pink-600/10 border border-pink-500/40 py-2 text-xs font-bold text-pink-400 hover:bg-pink-600 hover:text-white transition uppercase shadow-sm"
-															>
-																Download Pledge Report
-															</button>
+													<div className="flex flex-col gap-2 ml-4 min-w-[160px]">
+														{pledge.status === "PENDING" && (
 															<button
 																onClick={() => handleAcceptOrganPledge(pledge.id)}
 																className="w-full rounded-lg bg-[#E91E63] py-2 text-xs font-bold text-white hover:opacity-90 transition shadow-lg uppercase tracking-wider"
 															>
 																Accept Pledge
 															</button>
-														</>
-													)}
-													{pledge.health_certificate && (
-														<a
-															href={pledge.health_certificate}
-															target="_blank"
-															rel="noopener noreferrer"
-															className="rounded-lg border border-blue-500/50 px-4 py-2 text-sm font-semibold text-blue-300 transition hover:bg-blue-500/10 text-center"
+														)}
+														{pledge.pledge_report && (
+															<div className="space-y-2 mt-2">
+																<a
+																	href={pledge.pledge_report}
+																	target="_blank"
+																	rel="noopener noreferrer"
+																	className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/5 px-2 py-2 text-[10px] font-bold text-blue-300 hover:bg-blue-500/10 transition uppercase"
+																>
+																	<svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+																	</svg>
+																	View Details
+																</a>
+																<button
+																	onClick={() => handleVerifyOrganPledge(pledge.id, pledge.pledge_report)}
+																	className="w-full rounded-lg bg-green-600/20 border border-green-500/40 py-2 text-xs font-bold text-green-400 hover:bg-green-600 hover:text-white transition uppercase tracking-wider"
+																>
+																	Verified ✅
+																</button>
+																<button
+																	onClick={() => handleRejectOrganPledge(pledge.id)}
+																	className="w-full rounded-lg bg-red-600/20 border border-red-500/40 py-2 text-xs font-bold text-red-400 hover:bg-red-600 hover:text-white transition uppercase tracking-wider"
+																>
+																	Rejected ❌
+																</button>
+															</div>
+														)}
+													</div>
+												</div>
+											</div>
+										))
+									)}
+
+								</div>
+
+								<div className="mt-12">
+									<h3 className="text-xl font-bold text-white mb-6 border-b border-[#F6D6E3]/20 pb-2">Deceased Donor Requests</h3>
+									{deceasedRequests.length === 0 ? (
+										<div className="text-center py-8 rounded-xl bg-[#131326] border border-[#F6D6E3]/20 border-dashed">
+											<p className="text-pink-100/50">No deceased donor requests found.</p>
+										</div>
+									) : (
+										<div className="space-y-4">
+											{deceasedRequests.map((req) => (
+												<div key={req.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#131326] p-6 shadow-lg">
+													<div className="flex justify-between items-start">
+														<div>
+															<div className="flex items-center gap-3 mb-2">
+																<h4 className="text-lg font-bold text-white">{req.deceased_name}</h4>
+																<span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${req.status === 'APPROVED' ? 'bg-green-600/20 text-green-400' :
+																	req.status === 'REJECTED' || req.status === 'CANCELLED' ? 'bg-red-600/20 text-red-400' :
+																		'bg-yellow-600/20 text-yellow-400'
+																	}`}>
+																	{req.status}
+																</span>
+															</div>
+															<p className="text-sm text-pink-100/80">
+																<span className="font-semibold">Requester:</span> {req.requester_name} ({req.requester_relation})
+															</p>
+															<p className="text-sm text-pink-100/80">
+																<span className="font-semibold">Contact:</span> {req.requester_phone}
+															</p>
+															<p className="mt-2 text-sm text-pink-100/70">
+																<span className="font-semibold text-blue-400">Organs Available:</span> {req.organs_available}
+															</p>
+															<div className="mt-2 text-xs text-pink-100/60">
+																<p>Date of Death: {req.deceased_date_of_death}</p>
+																<p>Hospital: {req.hospital_name || "N/A"}</p>
+															</div>
+															{req.notes && (
+																<div className="mt-3 p-2 rounded bg-white/5 text-xs text-pink-100/80 italic">
+																	"{req.notes}"
+																</div>
+															)}
+														</div>
+
+														{req.status === "PENDING" && (
+															<div className="flex flex-col gap-2">
+																<button
+																	onClick={() => handleProcessDeceasedRequest(req.id, "APPROVED")}
+																	className="rounded-lg bg-green-600 px-4 py-2 text-xs font-bold text-white hover:bg-green-700 transition uppercase"
+																>
+																	Accept
+																</button>
+																<button
+																	onClick={() => handleProcessDeceasedRequest(req.id, "REJECTED")}
+																	className="rounded-lg bg-red-600/20 border border-red-500/40 px-4 py-2 text-xs font-bold text-red-400 hover:bg-red-600 hover:text-white transition uppercase"
+																>
+																	Reject
+																</button>
+															</div>
+														)}
+													</div>
+												</div>
+											))}
+										</div>
+									)}
+								</div>
+							</>
+						)}
+						{activeTab === "AMBULANCE" && (
+							<div className="space-y-4">
+								{ambulanceRequests.length === 0 ? (
+									<div className="text-center py-12 rounded-xl bg-[#131326] border border-[#F6D6E3]/20 border-dashed">
+										<p className="text-pink-100/50">No ambulance requests found.</p>
+									</div>
+								) : (
+									ambulanceRequests.map((req) => (
+										<div key={req.id} className="rounded-xl border border-red-500/30 bg-[#131326] p-6 shadow-lg shadow-red-500/5">
+											<div className="flex justify-between items-start">
+												<div>
+													<div className="flex items-center gap-3 mb-2">
+														<h3 className="text-lg font-bold text-white">
+															{req.patient_name || "Emergency Patient"}
+														</h3>
+														<span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${req.status === 'COMPLETED' ? 'bg-green-600/20 text-green-400' : 'bg-red-600/20 text-red-100'}`}>
+															{req.status}
+														</span>
+													</div>
+													<p className="text-sm text-pink-100/80">
+														<span className="text-red-400 font-bold">Location:</span> {req.location}
+													</p>
+													<p className="text-sm text-pink-100/80">
+														<span className="text-red-400 font-bold">Phone:</span> {req.contact_phone}
+													</p>
+													<p className="mt-2 text-xs text-pink-100/50">
+														Reporter: {req.reporter?.username || "Anonymous"} • {new Date(req.created_at).toLocaleString()}
+													</p>
+												</div>
+												<div className="flex flex-col gap-2">
+													{req.status === "PENDING" && (
+														<button
+															onClick={() => handleAcceptAmbulance(req.id)}
+															className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 transition uppercase"
 														>
-															View Health Cert
-														</a>
+															Dispatch Ambulance 🚑
+														</button>
+													)}
+													{req.status === "ACCEPTED" && (
+														<button
+															onClick={() => handleCompleteAmbulance(req.id)}
+															className="rounded-lg bg-green-600 px-4 py-2 text-xs font-bold text-white hover:bg-green-700 transition uppercase"
+														>
+															Mark Completed (Patient Admitted)
+														</button>
+													)}
+													{req.status === "COMPLETED" && (
+														<div className="text-[10px] text-green-400 font-bold uppercase border border-green-400/30 bg-green-400/10 px-2 py-1 rounded">
+															Life Saved ✨
+														</div>
 													)}
 												</div>
 											</div>
 										</div>
-									))}
-								</div>
+									))
+								)}
 							</div>
 						)}
 					</div>

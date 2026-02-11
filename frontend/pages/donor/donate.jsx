@@ -87,6 +87,15 @@ export default function DonorDonate() {
 
 			setHospitals(allHospitals)
 			setLoadingHospitals(false)
+
+			// Pre-select hospital if hospital_id is in query params
+			if (typeof window !== "undefined") {
+				const urlParams = new URLSearchParams(window.location.search)
+				const preSelectedId = urlParams.get("hospital_id")
+				if (preSelectedId) {
+					setSelectedOrg(preSelectedId)
+				}
+			}
 		}
 		loadHospitals()
 	}, [])
@@ -251,11 +260,14 @@ export default function DonorDonate() {
 											}
 											const hospitalType = hospitalTypeLabels[org.hospital_type] || org.hospital_type || "Hospital"
 
+											const isLocked = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("hospital_id") === org.id.toString()
+											const isOtherLocked = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("hospital_id") && selectedOrg !== org.id.toString()
+
 											return (
 												<label
 													key={org.id}
 													className={`flex cursor-pointer flex-col gap-3 rounded-2xl border px-5 py-5 transition ${selectedOrg === org.id.toString() ? "border-[#E91E63] bg-[#1b2a4a] shadow-lg shadow-[#E91E63]/20" : "border-[#3a4f7a] bg-[#0b1730] hover:border-[#4e7fff]"
-														}`}
+														} ${isOtherLocked ? "opacity-40 cursor-not-allowed" : ""}`}
 												>
 													<div className="flex items-start justify-between gap-3">
 														<div className="flex-1">
@@ -264,6 +276,11 @@ export default function DonorDonate() {
 																<span className="rounded-full bg-[#E91E63]/20 px-2 py-0.5 text-xs font-medium text-[#E91E63]">
 																	Registered
 																</span>
+																{isLocked && (
+																	<span className="text-[10px] text-pink-100/50 italic">
+																		(Locked for Critical Match)
+																	</span>
+																)}
 															</div>
 															<p className="text-sm text-[#d7dcff] mb-3">
 																<span className="font-medium">{hospitalType}</span>
@@ -343,8 +360,9 @@ export default function DonorDonate() {
 															name="organisation"
 															value={org.id}
 															checked={selectedOrg === org.id.toString()}
-															onChange={() => setSelectedOrg(org.id.toString())}
-															className="h-5 w-5 accent-[#E91E63] mt-1 flex-shrink-0"
+															onChange={() => !isOtherLocked && setSelectedOrg(org.id.toString())}
+															disabled={isOtherLocked}
+															className={`h-5 w-5 accent-[#E91E63] mt-1 flex-shrink-0 ${isOtherLocked ? "cursor-not-allowed" : ""}`}
 														/>
 													</div>
 												</label>

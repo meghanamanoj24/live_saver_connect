@@ -1,5 +1,5 @@
 from django.db.models import Q
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
@@ -8,40 +8,68 @@ from django.db import transaction
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
 from datetime import timedelta, datetime
+import hashlib
+import io
+from django.core.files.base import ContentFile
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import hashlib
+import io
+from django.core.files.base import ContentFile
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
-from .models import User, UserRoles, DonorProfile, DonorCoupon, EmergencyNeed, OrganDonor, MarketplaceItem, Hospital, Doctor, DoctorAvailability, Review, DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, AccidentAlert, BloodDonationEvent, EventRegistration, MedicalEssential, MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, PatientVisit, Staff, StaffAvailability, Attendance, SalaryPayment, PerformanceTracking, EquipmentNeed, EquipmentOrder, Invoice
+
 from .serializers import (
-	DonorProfileSerializer,
-	DonorCouponSerializer,
-	EmergencyNeedSerializer,
-	OrganDonorSerializer,
-	MarketplaceItemSerializer,
-	HospitalSerializer,
-	DoctorSerializer,
-	DoctorAvailabilitySerializer,
-	ReviewSerializer,
-	DonationRequestSerializer,
-	HospitalNeedSerializer,
-	AppointmentSerializer,
-	DeceasedDonorRequestSerializer,
-	AccidentAlertSerializer,
-	BloodDonationEventSerializer,
-	CustomTokenObtainPairSerializer,
-	MedicalEssentialSerializer,
-	MedicalStoreProductSerializer,
-	MedicalEquipmentSerializer,
-	MedicalOrderSerializer,
-	MedicalOrderItemSerializer,
-	PatientVisitSerializer,
-	StaffSerializer,
-	StaffAvailabilitySerializer,
-	AttendanceSerializer,
-	SalaryPaymentSerializer,
-	PerformanceTrackingSerializer,
-	EquipmentNeedSerializer,
-	EquipmentOrderSerializer,
-	InvoiceSerializer,
-	EventRegistrationSerializer,
+    DonorProfileSerializer,
+    DonorCouponSerializer,
+    EmergencyNeedSerializer,
+    OrganDonorSerializer,
+    MarketplaceItemSerializer,
+    HospitalSerializer,
+    DoctorSerializer,
+    DoctorAvailabilitySerializer,
+    ReviewSerializer,
+    DonationRequestSerializer,
+    HospitalNeedSerializer,
+    AppointmentSerializer,
+    DeceasedDonorRequestSerializer,
+    AccidentAlertSerializer,
+    BloodDonationEventSerializer,
+    CustomTokenObtainPairSerializer,
+    MedicalEssentialSerializer,
+    MedicalStoreProductSerializer,
+    MedicalEquipmentSerializer,
+    MedicalOrderSerializer,
+    MedicalOrderItemSerializer,
+    PatientVisitSerializer,
+    StaffSerializer,
+    StaffAvailabilitySerializer,
+    AttendanceSerializer,
+    SalaryPaymentSerializer,
+    PerformanceTrackingSerializer,
+    EquipmentNeedSerializer,
+    EquipmentOrderSerializer,
+    InvoiceSerializer,
+    EventRegistrationSerializer,
+    AmbulanceRequestSerializer,
+)
+
+from .models import (
+    User, UserRoles, DonorProfile, DonorCoupon, EmergencyNeed, OrganDonor, 
+    MarketplaceItem, Hospital, Doctor, DoctorAvailability, Review, 
+    DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, 
+    AccidentAlert, BloodDonationEvent, EventRegistration, MedicalEssential, 
+    MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, 
+    PatientVisit, Staff, StaffAvailability, Attendance, SalaryPayment, 
+    PerformanceTracking, EquipmentNeed, EquipmentOrder, Invoice, PDFIntegrityLedger,
+    AmbulanceRequest
 )
 
 
@@ -160,6 +188,7 @@ class RegisterUserView(APIView):
                 if role == UserRoles.DONOR:
                     DonorProfile.objects.create(
                         user=user,
+                        date_of_birth=data.get("date_of_birth")
                     )
 
                 elif role == UserRoles.HOSPITAL:
@@ -313,6 +342,156 @@ class DonorProfileViewSet(viewsets.ModelViewSet):
 			}
 		)
 
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def generate_health_report(self, request):
+		"""
+		Generates a secure, password-protected PDF health report.
+		Expects assessment data in request body.
+		"""
+		from django.http import HttpResponse
+		from .pdf_service import generate_secure_health_report
+		
+		profile = self._get_or_none(request.user)
+		if not profile:
+			return Response({"detail": "Donor profile not found."}, status=status.HTTP_404_NOT_FOUND)
+		
+		# --- Blockchain IDs for Watermark ---
+		import secrets
+		import time
+		download_id = f"DL-{secrets.token_hex(8).upper()}"
+		timestamp_unix = time.time()
+		timestamp_str = datetime.fromtimestamp(timestamp_unix).strftime('%d/%m/%Y, %H:%M:%S')
+		watermark_text = f"{download_id} | {timestamp_str}"
+		
+		assessment_data = request.data
+		donor_data = {
+			"name": f"{request.user.first_name} {request.user.last_name}",
+			"email": request.user.email,
+			"blood_group": request.user.blood_group,
+			"age": assessment_data.get("age"),
+			"weight": assessment_data.get("weight"),
+			"health_score": assessment_data.get("healthScore"),
+			"can_donate": assessment_data.get("canDonate"),
+			"recommendation": assessment_data.get("recommendation") or assessment_data.get("message"),
+		}
+		
+		try:
+			pdf_buffer = generate_secure_health_report(donor_data, watermark_text=watermark_text)
+			pdf_bytes = pdf_buffer.getvalue()
+
+			# --- Blockchain Integrity Recording ---
+			from .blockchain_service import BlockchainService
+			block = BlockchainService.record_download(
+				request.user, 
+				pdf_bytes, 
+				download_id=download_id, 
+				timestamp=str(timestamp_unix),
+				report_type="BLOOD"
+			)
+			
+			# Link report ID to donor profile for verification
+			profile.latest_report_id = download_id
+			profile.save()
+			
+			response = HttpResponse(pdf_bytes, content_type='application/pdf')
+			last_name = request.user.last_name or "Donor"
+			today = datetime.now().strftime('%Y%m%d')
+			filename = f"Health_Report_{last_name}_{today}.pdf"
+			response['Content-Disposition'] = f'attachment; filename="{filename}"'
+			
+			# Add blockchain metadata to headers
+			response['X-Download-ID'] = block.download_id
+			response['X-Blockchain-Hash'] = block.block_hash
+			
+			return response
+		except Exception as e:
+			print(f"PDF Generation Error: {str(e)}")
+			return Response({
+				"detail": f"Error generating PDF: {str(e)}"
+			}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+	@action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+	def download_history(self, request):
+		"""Lists all PDF downloads recorded on the blockchain for this user."""
+		from .models import PDFIntegrityLedger
+		records = PDFIntegrityLedger.objects.filter(user=request.user)
+		
+		# Optional Filtering
+		report_type = request.query_params.get("report_type")
+		if report_type:
+			records = records.filter(report_type=report_type)
+			
+		records = records.order_by('-created_at')
+		
+		data = [
+			{
+				"id": r.id,
+				"download_id": r.download_id,
+				"report_type": r.report_type,
+				"pdf_hash": r.pdf_hash,
+				"block_hash": r.block_hash,
+				"timestamp": r.created_at,
+				"nonce": r.nonce,
+				"pdf_file": r.pdf_file.url if r.pdf_file else None
+			}
+			for r in records
+		]
+		return Response(data)
+
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def verify_health_report(self, request):
+		"""
+		Verifies that an uploaded PDF matches the latest blockchain-secured report for this donor.
+		"""
+		uploaded_file = request.FILES.get('file')
+		if not uploaded_file:
+			return Response({"valid": False, "detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Verify file type
+		if not uploaded_file.name.endswith('.pdf'):
+			return Response({"valid": False, "detail": "Only PDF files are allowed."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Hash the uploaded content
+		import hashlib
+		hasher = hashlib.sha256()
+		for chunk in uploaded_file.chunks():
+			hasher.update(chunk)
+		uploaded_hash = hasher.hexdigest()
+
+		# Get donor profile and latest report ID
+		profile = request.user.donor_profile
+		if not profile or not profile.latest_report_id:
+			return Response({
+				"valid": False, 
+				"detail": "No previous health report found in your profile. Please generate one first."
+			}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Get the ledger entry for the expected report
+		from .models import PDFIntegrityLedger
+		ledger_entry = PDFIntegrityLedger.objects.filter(
+			user=request.user, 
+			download_id=profile.latest_report_id
+		).first()
+
+		if not ledger_entry:
+			return Response({
+				"valid": False, 
+				"detail": "Integrity record not found for your latest report."
+			}, status=status.HTTP_404_NOT_FOUND)
+
+		# Comparison
+		if uploaded_hash == ledger_entry.pdf_hash:
+			return Response({
+				"valid": True,
+				"detail": "Integrity verified! This is the authentic report.",
+				"download_id": ledger_entry.download_id
+			})
+		else:
+			return Response({
+				"valid": False, 
+				"detail": "Integrity mismatch! This PDF does not match the latest report generated for you. Please upload the original, unmodified file."
+			}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class DonorCouponViewSet(viewsets.ReadOnlyModelViewSet):
 	queryset = DonorCoupon.objects.all()
@@ -328,20 +507,75 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 	serializer_class = EmergencyNeedSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+	@action(detail=False, methods=["get"], permission_classes=[permissions.AllowAny])
+	def donor_count(self, request):
+		blood_group = request.query_params.get("blood_group")
+		need_type = request.query_params.get("need_type", "BLOOD")
+		city = request.query_params.get("city")
+		organ_type = request.query_params.get("organ_type")
+		
+		from .utils_email import get_compatible_donor_emails
+		emails = get_compatible_donor_emails(blood_group, need_type, city, organ_type)
+		return Response({"count": len(emails)})
+
+	@action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+	def matched_needs(self, request):
+		user = request.user
+		blood_group = user.blood_group
+		city = getattr(user.donor_profile, "city", None) if hasattr(user, "donor_profile") else None
+		
+		if not blood_group:
+			return Response([])
+			
+		from .utils_email import BLOOD_RECEIVE_COMPATIBILITY, PLATELET_RECEIVE_COMPATIBILITY
+		
+		# Who can GIVE to this patient blood group? 
+		# Wait, the donor IS the one giving. 
+		# So we need to find needs where the donor can help.
+		
+		# A donor with group 'D' can help a patient with group 'P' 
+		# if 'D' is in P's compatibility list.
+		
+		# This is slow if we iterate all needs. 
+		# Let's find all patient groups that can receive from this donor.
+		
+		def get_receivable_groups(donor_group, compatibility_map):
+			return [p_group for p_group, donors in compatibility_map.items() if donor_group in donors]
+
+		receivable_blood = get_receivable_groups(blood_group, BLOOD_RECEIVE_COMPATIBILITY)
+		receivable_platelets = get_receivable_groups(blood_group, PLATELET_RECEIVE_COMPATIBILITY)
+		
+		q_filter = Q(need_type="BLOOD", required_blood_group__in=receivable_blood) | \
+				   Q(need_type="PLATELETS", required_blood_group__in=receivable_platelets) | \
+				   Q(need_type="ORGAN")
+		
+		matches = EmergencyNeed.objects.filter(q_filter, status="OPEN")
+		
+		if city:
+			matches = matches.filter(city__icontains=city)
+			
+		serializer = self.get_serializer(matches.order_by("-created_at"), many=True)
+		return Response(serializer.data)
+
 	@action(detail=False, methods=["post"], permission_classes=[permissions.AllowAny])
 	def critical_emergency(self, request):
+		print("form submitted-------------------------------------------------")
 		"""Create a critical emergency need (blood, platelets, hospitalization) - allows anonymous"""
 		from django.contrib.auth import get_user_model
 		User = get_user_model()
 		
-		# Get or create an anonymous user for emergency needs
-		anonymous_user, _ = User.objects.get_or_create(
-			username="emergency_anonymous",
-			defaults={"email": "emergency@lifesaver.local", "is_active": False}
-		)
+		# If user is authenticated, use them. Otherwise, use anonymous user.
+		if request.user.is_authenticated:
+			creator = request.user
+		else:
+			# Get or create an anonymous user for emergency needs
+			creator, _ = User.objects.get_or_create(
+				email="emergency@lifesaver.local",
+				defaults={"first_name": "Emergency", "last_name": "Anonymous", "is_active": False}
+			)
 		
 		data = request.data.copy()
-		data["created_by_id"] = anonymous_user.id
+		data["created_by_id"] = creator.id
 		data["status"] = "OPEN"
 		
 		# Set needed_by to immediate if not provided
@@ -403,12 +637,34 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 				for h in hospitals
 			]
 		
+		# Trigger emergency email alerts to compatible donors
+		from .utils_email import send_emergency_alert_email
+		sent_emails_count = send_emergency_alert_email(emergency_need)
+		
 		return Response({
-			"message": "Critical emergency need created! Nearby hospitals and blood banks have been notified.",
+			"message": f"Critical emergency need created! {sent_emails_count} matching donors have been notified via email. Nearby hospitals have also been alerted.",
 			"emergency_need": serializer.data,
 			"nearby_hospitals": nearby_hospitals,
-			"ambulance_contact": "112",
+			"emails_sent": sent_emails_count
 		}, status=status.HTTP_201_CREATED)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def accept_need(self, request, pk=None):
+		"""Mark the need as accepted by the current donor"""
+		need = self.get_object()
+		if need.status == "FULFILLED":
+			return Response({"error": "This request has already been fulfilled."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		need.accepted_by = request.user
+		need.status = "FULFILLED" # Or maybe keep OPEN until confirmed? 
+		# User said "it should show in this page an user has been got"
+		# Let's set it to FULFILLED so it disappears from 'open' lists but shows as found here.
+		need.save()
+		
+		return Response({
+			"message": "You have successfully accepted this emergency request. Please contact the patient immediately.",
+			"need": self.get_serializer(need).data
+		})
 
 
 class OrganDonorViewSet(viewsets.ModelViewSet):
@@ -421,15 +677,17 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		if not user.is_authenticated:
 			return OrganDonor.objects.none()
 			
-		# If user is a hospital, show donors who selected this hospital OR those who have already been accepted by this hospital
-		if hasattr(user, 'hospital_profile'):
-			from django.db.models import Q
-			return OrganDonor.objects.filter(
-				Q(selected_hospitals=user.hospital_profile) | Q(accepted_by_hospital=user.hospital_profile)
-			).distinct()
+		from django.db.models import Q
+		
+		# Base logic: User should always see their own records
+		base_query = Q(created_by=user)
+		
+		# If user is a hospital, additional records they can see:
+		hospital = getattr(user, 'hospital_profile', None)
+		if hospital:
+			base_query |= Q(selected_hospitals=hospital) | Q(accepted_by_hospital=hospital)
 			
-		# If user is a normal user/donor, show their own profile
-		return OrganDonor.objects.filter(created_by=user)
+		return OrganDonor.objects.filter(base_query).distinct()
 
 	@action(detail=False, methods=["get", "put", "patch"], permission_classes=[permissions.IsAuthenticated])
 	def me(self, request):
@@ -512,6 +770,66 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		
 		return Response(self.get_serializer(organ_donor).data)
 
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def generate_draft_pledge(self, request):
+		"""
+		Generates a SECURE draft PDF and tracks it in the Blockchain Ledger.
+		"""
+		import secrets
+		import time
+		from .pdf_service import generate_secure_organ_pledge_report
+		from .blockchain_service import BlockchainService
+		from django.http import HttpResponse
+
+		data = request.data
+		
+		# Metadata for Watermark & Ledger
+		download_id = f"DRAFT-{request.user.id}-{secrets.token_hex(4).upper()}"
+		timestamp_unix = time.time()
+		timestamp_str = datetime.fromtimestamp(timestamp_unix).strftime('%d/%m/%Y, %H:%M:%S')
+		watermark_text = f"{download_id} | {timestamp_str} (DRAFT)"
+		
+		donor_data = {
+			"id": "DRAFT",
+			"name": request.user.first_name + " " + request.user.last_name,
+			"blood_group": data.get("blood_group") or request.user.blood_group,
+			"date_of_birth": data.get("date_of_birth") or getattr(request.user.donor_profile, 'date_of_birth', 'N/A'),
+			"phone": data.get("phone") or request.user.phone,
+			"emergency_contact_name": data.get("emergency_contact_name"),
+			"emergency_contact_phone": data.get("emergency_contact_phone"),
+			"organs": data.get("organs"),
+		}
+
+		if data.get("organs_list") and isinstance(data.get("organs_list"), list):
+			if "ALL" in data.get("organs_list"):
+				donor_data["organs"] = "All Viable Organs"
+			else:
+				donor_data["organs"] = ", ".join(data.get("organs_list"))
+		elif not donor_data["organs"]:
+			donor_data["organs"] = "Not Selected"
+
+		try:
+			# Generate Secure PDF
+			pdf_buffer = generate_secure_organ_pledge_report(donor_data, watermark_text=watermark_text)
+			pdf_bytes = pdf_buffer.getvalue()
+			
+			# TRACK IN BLOCKCHAIN LEDGER
+			BlockchainService.record_download(
+				request.user, 
+				pdf_bytes, 
+				download_id=download_id, 
+				timestamp=str(timestamp_unix),
+				report_type="ORGAN_PLEDGE"
+			)
+			
+			response = HttpResponse(pdf_bytes, content_type='application/pdf')
+			filename = f"Draft_Pledge_{request.user.last_name}.pdf"
+			response['Content-Disposition'] = f'attachment; filename="{filename}"'
+			return response
+		except Exception as e:
+			print(f"Draft Ledger Error: {e}")
+			return Response({"detail": "Failed to generate tracked draft report."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def commit_pledge(self, request, pk=None):
 		"""Donor acknowledges the hospital condition and finalizing the pledge"""
@@ -519,12 +837,158 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		if organ_donor.created_by != request.user:
 			return Response({"detail": "You can only commit to your own pledge."}, status=status.HTTP_403_FORBIDDEN)
 		
-		if organ_donor.status != "ACCEPTED":
-			return Response({"detail": "Pledge must be accepted by a hospital first."}, status=status.HTTP_400_BAD_REQUEST)
-		
 		organ_donor.status = "COMMITTED"
+		
+		# --- SECURE PDF & BLOCKCHAIN INTEGRATION ---
+		import secrets
+		import time
+		from .pdf_service import generate_secure_organ_pledge_report
+		from .blockchain_service import BlockchainService
+		from django.core.files.base import ContentFile
+
+		# Generate Blockchain Metadata
+		download_id = f"PLEDGE-{organ_donor.id}-{secrets.token_hex(4).upper()}"
+		timestamp_unix = time.time()
+		timestamp_str = datetime.fromtimestamp(timestamp_unix).strftime('%d/%m/%Y, %H:%M:%S')
+		watermark_text = f"{download_id} | {timestamp_str}"
+		
+		# Prepare Data
+		organs_str = "All Viable Organs"
+		if organ_donor.organs and "ALL" not in organ_donor.organs:
+			organs_str = organ_donor.organs
+
+		donor_data = {
+			"id": organ_donor.id,
+			"name": request.user.first_name + " " + request.user.last_name,
+			"blood_group": organ_donor.blood_group,
+			"date_of_birth": organ_donor.date_of_birth,
+			"phone": organ_donor.phone,
+			"emergency_contact_name": organ_donor.emergency_contact_name,
+			"emergency_contact_phone": organ_donor.emergency_contact_phone,
+			"organs": organs_str,
+		}
+		
+		try:
+			# Generate Secure PDF
+			pdf_buffer = generate_secure_organ_pledge_report(donor_data, watermark_text=watermark_text)
+			pdf_bytes = pdf_buffer.getvalue()
+			
+			# Record in Blockchain Ledger
+			block = BlockchainService.record_download(
+				request.user, 
+				pdf_bytes, 
+				download_id=download_id, 
+				timestamp=str(timestamp_unix),
+				report_type="ORGAN_PLEDGE"
+			)
+			
+			# Save to Model
+			file_name = f"Secure_Pledge_{organ_donor.id}_{int(timestamp_unix)}.pdf"
+			organ_donor.pledge_report.save(file_name, ContentFile(pdf_bytes), save=False)
+			organ_donor.blockchain_record = block
+			
+			# If already accepted, move to COMMITTED on finalize
+			if organ_donor.status == "ACCEPTED":
+				organ_donor.status = "COMMITTED"
+				
+			organ_donor.save()
+			
+			return Response(self.get_serializer(organ_donor).data)
+			
+		except Exception as e:
+			print(f"Secure Pledge Ledger Error: {e}")
+			return Response({"detail": "Failed to generate tracked pledge."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def intake_body(self, request, pk=None):
+		"""Hospital verifies blockchain record, intakes body, and records payment"""
+		organ_donor = self.get_object()
+		
+		# Verify Hospital Permission
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital:
+			return Response({"detail": "Only hospitals can intake bodies."}, status=status.HTTP_403_FORBIDDEN)
+			
+		# Verify Blockchain Hash (Simulated verification step)
+		provided_hash = request.data.get("pdf_hash")
+		if provided_hash and organ_donor.blockchain_record:
+			clean_provided = str(provided_hash).strip().lower()
+			clean_stored = str(organ_donor.blockchain_record.pdf_hash).strip().lower()
+			
+			if clean_provided != clean_stored:
+				return Response({
+					"detail": f"Blockchain verification FAILED. The provided hash doesn't match the record for this donor.",
+					"provided": clean_provided,
+					"expected_on_record": clean_stored
+				}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Update Status
+		organ_donor.status = "COMPLETED"
+		
+		received_at = request.data.get("received_at")
+		if received_at:
+			organ_donor.body_received_at = received_at
+		else:
+			organ_donor.body_received_at = timezone.now()
+			
+		organ_donor.accepted_by_hospital = hospital
+		
+		# Record Payment
+		payment = request.data.get("payment_amount")
+		if payment:
+			organ_donor.payment_amount = payment
+			organ_donor.payment_date = organ_donor.body_received_at
+				
 		organ_donor.save()
+		
 		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def hospital_verify(self, request, pk=None):
+		"""Hospital verifies or rejects the organ pledge report"""
+		organ_donor = self.get_object()
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital:
+			return Response({"detail": "Only hospitals can verify pledges."}, status=status.HTTP_403_FORBIDDEN)
+			
+		decision = request.data.get("decision") # 'verify' or 'reject'
+		if decision == 'reject':
+			organ_donor.status = "REJECTED"
+			organ_donor.save()
+			return Response({"status": "REJECTED", "detail": "Pledge report rejected."})
+			
+		# Else verify
+		organ_donor.status = "REPORT_VERIFIED"
+		organ_donor.accepted_by_hospital = hospital
+		organ_donor.save()
+		
+		data = self.get_serializer(organ_donor).data
+		if organ_donor.blockchain_record:
+			data["blockchain_record"] = {
+				"download_id": organ_donor.blockchain_record.download_id,
+				"pdf_hash": organ_donor.blockchain_record.pdf_hash,
+				"timestamp": organ_donor.blockchain_record.created_at,
+			}
+		return Response(data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def donor_finalize(self, request, pk=None):
+		"""Donor confirms or rejects the pledge after report verification"""
+		organ_donor = self.get_object()
+		if organ_donor.created_by != request.user:
+			return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+			
+		action_type = request.data.get("action") # 'accept' or 'reject'
+		if action_type == 'accept':
+			organ_donor.status = "COMMITTED"
+			organ_donor.save()
+			return Response(self.get_serializer(organ_donor).data)
+		elif action_type == 'reject':
+			organ_donor.delete()
+			return Response({"status": "DELETED", "detail": "Pledge cancelled and removed."})
+		
+		return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def receive_body(self, request, pk=None):
@@ -538,12 +1002,92 @@ class OrganDonorViewSet(viewsets.ModelViewSet):
 		organ_donor.status = "COMPLETED"
 		organ_donor.body_received_at = timezone.now()
 		
-		payment_amount = request.data.get("payment_amount")
-		if payment_amount:
-			organ_donor.payment_amount = payment_amount
-			organ_donor.payment_date = timezone.now()
-
+		# Record Payment
+		organ_donor.payment_amount = request.data.get("payment_amount")
+		organ_donor.payment_date = timezone.now()
 		organ_donor.save()
+		
+		# Record a PatientVisit for the intake
+		from .models import PatientVisit
+		PatientVisit.objects.create(
+			patient=organ_donor.created_by,
+			hospital=hospital,
+			visit_purpose="ORGAN_DONATION",
+			visit_date=timezone.now(),
+			notes=f"Organ intake completed for pledge ID {organ_donor.id}. Payment recorded."
+		)
+
+		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def submit_verified_report(self, request):
+		"""Attaches an uploaded verified report and notifies selected hospitals"""
+		file_obj = request.FILES.get('file')
+		hospital_ids = request.data.getlist('selected_hospitals')
+		
+		if not file_obj:
+			return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		import hashlib
+		pdf_content = file_obj.read()
+		file_hash = hashlib.sha256(pdf_content).hexdigest()
+		file_obj.seek(0) # IMPORTANT: Rewind for saving
+		
+		from .models import PDFIntegrityLedger, Hospital
+		try:
+			record = PDFIntegrityLedger.objects.get(pdf_hash=file_hash, report_type="ORGAN_PLEDGE")
+			if not record.is_active:
+				return Response({"detail": "This report has been replaced by a newer draft. Please use the most recently downloaded report."}, status=status.HTTP_400_BAD_REQUEST)
+		except PDFIntegrityLedger.DoesNotExist:
+			return Response({"detail": "This report is not registered on our blockchain. Cannot submit."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		# Find or create organ donor profile
+		organ_donor, created = OrganDonor.objects.get_or_create(created_by=request.user)
+		
+		# Save report and record
+		organ_donor.pledge_report.save(file_obj.name, file_obj)
+		organ_donor.blockchain_record = record
+		organ_donor.status = "PENDING" # Reset to pending for hospital review
+		
+		# Update hospitals
+		if hospital_ids:
+			hospitals = Hospital.objects.filter(id__in=hospital_ids)
+			organ_donor.selected_hospitals.set(hospitals)
+			
+		organ_donor.save()
+		return Response(self.get_serializer(organ_donor).data)
+
+	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def verify_pledge_report(self, request):
+		"""Verifies uploaded PDF against blockchain ledger"""
+		file_obj = request.FILES.get('file')
+		if not file_obj:
+			return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		import hashlib
+		pdf_content = file_obj.read()
+		file_hash = hashlib.sha256(pdf_content).hexdigest()
+		
+		from .models import PDFIntegrityLedger
+		try:
+			record = PDFIntegrityLedger.objects.get(pdf_hash=file_hash, report_type="ORGAN_PLEDGE")
+			if not record.is_active:
+				return Response({
+					"valid": False,
+					"detail": "This report has been replaced by a newer draft. Please use the most recently downloaded report."
+				}, status=status.HTTP_400_BAD_REQUEST)
+			
+			return Response({
+				"valid": True, 
+				"detail": "Blockchain match found! Report is authentic.",
+				"download_id": record.download_id,
+				"timestamp": record.created_at
+			})
+		except PDFIntegrityLedger.DoesNotExist:
+			return Response({
+				"valid": False, 
+				"detail": "No matching blockchain record found for this file."
+			}, status=status.HTTP_404_NOT_FOUND)
 		return Response(self.get_serializer(organ_donor).data)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
@@ -633,19 +1177,18 @@ class DoctorViewSet(viewsets.ModelViewSet):
 	serializer_class = DoctorSerializer
 	permission_classes = [permissions.AllowAny]
 
+	def get_queryset(self):
+		queryset = super().get_queryset()
+		hospital_id = self.request.query_params.get("hospital")
+		if hospital_id:
+			queryset = queryset.filter(hospital_id=hospital_id)
+		return queryset
+
 	def create(self, request, *args, **kwargs):
-		print("Submitted Data:", request.data)
-
-		serializer = self.get_serializer(data=request.data)
-
-		if not serializer.is_valid():
-			print("Validation Errors:", serializer.errors)
-			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-		self.perform_create(serializer)
-		print("Saved Data:", serializer.data)
-
-		return Response(serializer.data, status=status.HTTP_201_CREATED)
+		try:
+			return super().create(request, *args, **kwargs)
+		except Exception as e:
+			return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ReviewViewSet(viewsets.ModelViewSet):
@@ -655,29 +1198,65 @@ class ReviewViewSet(viewsets.ModelViewSet):
 
 
 class DonationRequestViewSet(viewsets.ModelViewSet):
-	queryset = DonationRequest.objects.select_related("hospital").all().order_by("-created_at")
+	queryset = DonationRequest.objects.select_related("hospital", "donor").all().order_by("-created_at")
 	serializer_class = DonationRequestSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+	def perform_create(self, serializer):
+		# Auto-attach the latest verified health report from the integrity ledger
+		user = self.request.user
+		health_report = None
+		health_status = "Verified via Blockchain Ledger"
+		
+		if user.is_authenticated:
+			profile = getattr(user, 'donor_profile', None)
+			if profile and profile.latest_report_id:
+				from .models import PDFIntegrityLedger
+				ledger_entry = PDFIntegrityLedger.objects.filter(
+					user=user, 
+					download_id=profile.latest_report_id
+				).first()
+				if ledger_entry and ledger_entry.pdf_file:
+					health_report = ledger_entry.pdf_file
+					
+					# IMMEDIATELY invalidate the report so it cannot be reused for another request
+					profile.latest_report_id = None
+					profile.save()
+		
+		serializer.save(
+			donor=user if user.is_authenticated else None,
+			health_report=health_report,
+			health_status=health_status
+		)
+
 	def get_queryset(self):
 		queryset = super().get_queryset()
-		# Filter by donor if requested
-		if self.request.query_params.get("donor") == "me":
-			# print("hhhhhhhh", self.request.query_params, self.request.user)
-			if not self.request.user.is_authenticated:
-				# print("yyyy")
-
+		user = self.request.user
+		
+		if not user.is_authenticated:
+			return DonationRequest.objects.none()
+		
+		# If it's a donor, they should only see their own requests
+		if user.role == "donor":
+			queryset = queryset.filter(donor=user)
+		# If it's a hospital, they should only see requests for their hospital
+		elif user.role == "hospital":
+			hospital = getattr(user, 'hospital_profile', None)
+			if hospital:
+				queryset = queryset.filter(hospital=hospital)
+			else:
+				# If user is hospital role but has no profile, return none
 				return DonationRequest.objects.none()
-			queryset = queryset.filter(donor=self.request.user)
-		# Filter by hospital if requested
+
+		# Optional additional filters via query params
 		hospital_id = self.request.query_params.get("hospital")
 		if hospital_id:
 			queryset = queryset.filter(hospital_id=hospital_id)
-		# Filter by request type if requested
+		
 		request_type = self.request.query_params.get("request_type")
 		if request_type:
 			queryset = queryset.filter(request_type=request_type)
-		# print("queryset",queryset)
+			
 		return queryset
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
@@ -699,6 +1278,38 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			request_obj.patient_name = patient_name
 			
 		request_obj.save()
+		
+		# AUTOMATED CLEANUP: When a donor is accepted, find and delete the matching HospitalNeed 
+		# (as it is now being fulfilled by this donor)
+		from .models import HospitalNeed
+		matching_needs = HospitalNeed.objects.filter(
+			hospital=request_obj.hospital,
+			need_type=request_obj.request_type,
+			status__in=["NORMAL", "URGENT"]
+		)
+		
+		# If we have patient name, use it to narrow down
+		if request_obj.patient_name:
+			exact_need = matching_needs.filter(patient_name__icontains=request_obj.patient_name).first()
+			if exact_need:
+				exact_need.delete()
+			else:
+				# If no exact name match, delete the most relevant one of that type
+				top_need = matching_needs.first()
+				if top_need:
+					top_need.delete()
+		else:
+			# Just delete the most recent urgent need of this type for this hospital
+			top_need = matching_needs.first()
+			if top_need:
+				top_need.delete()
+
+		# Correctly invalidate the report ID on the donor PROFILE
+		if request_obj.donor and hasattr(request_obj.donor, 'donor_profile'):
+			profile = request_obj.donor.donor_profile
+			profile.latest_report_id = None
+			profile.save()
+			
 		return Response(self.get_serializer(request_obj).data)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
@@ -706,10 +1317,30 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		request_obj = self.get_object()
 		if request_obj.status != "PENDING":
 			return Response({"detail": "Only pending requests can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
-		request_obj.status = "REJECTED"
-		request_obj.notes = request.data.get("notes", "")
-		request_obj.save()
-		return Response(self.get_serializer(request_obj).data)
+		
+		# AUTOMATED CLEANUP: Delete the matching HospitalNeed if rejecting a response
+		from .models import HospitalNeed
+		matching_needs = HospitalNeed.objects.filter(
+			hospital=request_obj.hospital,
+			need_type=request_obj.request_type
+		)
+		if request_obj.patient_name:
+			matching_needs = matching_needs.filter(patient_name__icontains=request_obj.patient_name)
+		
+		# Delete the need associated with this request rejection (as requested: "delete urgent blood request")
+		matching_needs.delete()
+		
+		# Correctly invalidate the report ID on the donor PROFILE before deleting the request
+		if request_obj.donor and hasattr(request_obj.donor, 'donor_profile'):
+			profile = request_obj.donor.donor_profile
+			profile.latest_report_id = None
+			profile.save()
+		
+		# AUTOMATED CLEANUP: Delete the DonationRequest immediately as requested
+		donor_id = request_obj.donor_id
+		request_obj.delete()
+			
+		return Response({"detail": "Request rejected and cleaned up successfully."}, status=status.HTTP_204_NO_CONTENT)
 	
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def confirm_arrival(self, request, pk=None):
@@ -718,6 +1349,16 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			return Response({"detail": "Only accepted requests can be confirmed for arrival."}, status=status.HTTP_400_BAD_REQUEST)
 		request_obj.status = "ARRIVED"
 		request_obj.confirmed_arrival_at = timezone.now()
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject_arrival(self, request, pk=None):
+		request_obj = self.get_object()
+		if request_obj.status != "ARRIVED":
+			return Response({"detail": "Only arrived donors can have their arrival status revoked."}, status=status.HTTP_400_BAD_REQUEST)
+		request_obj.status = "ACCEPTED"
+		request_obj.confirmed_arrival_at = None
 		request_obj.save()
 		return Response(self.get_serializer(request_obj).data)
 
@@ -736,10 +1377,16 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			from .models import PatientVisit
 			visit_date = request.data.get("visit_date") or timezone.now()
 			
+			purpose = "BLOOD_DONATION"
+			if request_obj.request_type == "PLATELETS":
+				purpose = "PLATELET_DONATION"
+			elif request_obj.request_type == "ORGAN":
+				purpose = "ORGAN_DONATION"
+
 			PatientVisit.objects.create(
 				patient=request_obj.donor,
 				hospital=request_obj.hospital,
-				visit_purpose="BLOOD_DONATION",
+				visit_purpose=purpose,
 				visit_date=visit_date,
 				notes=request.data.get("notes", ""),
 				rewards=request.data.get("rewards", ""),
@@ -777,7 +1424,11 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 				
 			profile.save()
 
-		return Response(self.get_serializer(request_obj).data)
+			# AUTOMATED CLEANUP: Delete the DonationRequest after it is COMPLETED and recorded
+			# We already saved everything to PatientVisit and DonorProfile
+			request_obj.delete()
+
+		return Response({"detail": "Donation verified and record cleaned up."}, status=status.HTTP_200_OK)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def reject_arrival(self, request, pk=None):
@@ -881,6 +1532,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 				if request.data.get("appointment_time"):
 					appointment.appointment_time = request.data.get("appointment_time")
 					
+				# Auto-populate charges from doctor if not set
+				if appointment.doctor and not appointment.charges:
+					appointment.charges = appointment.doctor.consultation_charge
+					appointment.currency = appointment.doctor.currency
+					
 				appointment.notes = request.data.get("notes", appointment.notes)
 				appointment.save()
 				return Response(self.get_serializer(appointment).data)
@@ -903,14 +1559,128 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 			return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-	def confirm(self, request, pk=None):
-		"""Donor confirms the hospital-approved appointment slot"""
+	def pay_fee(self, request, pk=None):
+		"""Donor pays the consultation fee for an approved appointment"""
 		appointment = self.get_object()
+		if appointment.status != "APPROVED":
+			return Response({"detail": "Fees can only be paid for approved appointments."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		appointment.is_paid = True
+		appointment.payment_date = timezone.now()
+		appointment.payment_method = request.data.get("payment_method", "DEMO_PAYMENT")
+		
+		# Generate a simulated receipt number
+		import secrets
+		receipt_no = f"RCPT-{appointment.id}-{secrets.token_hex(4).upper()}"
+		appointment.payment_receipt = receipt_no
+		appointment.save()
+		
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_reaching(self, request, pk=None):
+		"""Donor signals they are on the way to the appointment"""
+		appointment = self.get_object()
+		if appointment.status != "SCHEDULED" and not appointment.is_paid:
+			return Response({"detail": "Only confirmed and paid appointments can be signaled as 'reaching'."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		appointment.is_reaching = True
+		appointment.reaching_at = timezone.now()
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_arrival(self, request, pk=None):
+		appointment = self.get_object()
+		# Only allow arriving if the donor signaled they are reaching or if forced by staff
+		if not appointment.is_reaching and not request.user.role == "hospital":
+			return Response({"detail": "Donor has not signaled that they are reaching yet."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		appointment.status = "ARRIVED"
+		appointment.confirmed_arrival_at = timezone.now()
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def submit_prescription(self, request, pk=None):
+		"""Doctor submits a structured prescription for an arrived patient"""
+		appointment = self.get_object()
+		if appointment.status != "ARRIVED":
+			return Response({"detail": "Prescriptions can only be submitted for arrived patients."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		prescription_data = request.data.get("prescription_data")
+		next_date = request.data.get("next_consultation_date")
+		
+		if not prescription_data:
+			return Response({"detail": "Prescription data is required."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		appointment.prescription_data = prescription_data
+		appointment.next_consultation_date = next_date
+		appointment.status = "COMPLETED"
+		appointment.is_prescription_ready = True
+		
+		# Build a text summary for the legacy prescription field
+		summary = []
+		medicines = prescription_data.get("medicines", [])
+		for med in medicines:
+			line = f"- {med.get('name')}: {med.get('dosage')} ({med.get('timing')})"
+			summary.append(line)
+		
+		custom_meds = prescription_data.get("custom_medicines", [])
+		for med in custom_meds:
+			line = f"- {med.get('name')} (Custom): {med.get('dosage')} ({med.get('timing')})"
+			summary.append(line)
+			
+		if next_date:
+			summary.append(f"\nNext Consultation: {next_date}")
+			
+		appointment.prescription = "\n".join(summary)
+		appointment.save()
+
+		# Create PatientVisit record for history tracking
+		from .models import PatientVisit
+		PatientVisit.objects.get_or_create(
+			appointment=appointment,
+			defaults={
+				"patient": appointment.donor or (appointment.donation_request.donor if appointment.donation_request else None),
+				"hospital": appointment.hospital,
+				"doctor": appointment.doctor,
+				"visit_purpose": "CONSULTATION",
+				"visit_date": timezone.now(),
+				"notes": appointment.notes,
+				"charges": appointment.charges,
+				"currency": appointment.currency,
+				"payment_status": "PAID" if appointment.is_paid else "PENDING"
+			}
+		)
+		
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject_arrival(self, request, pk=None):
+		appointment = self.get_object()
+		if appointment.status != "ARRIVED":
+			return Response({"detail": "Only arrived donors can have their arrival status revoked."}, status=status.HTTP_400_BAD_REQUEST)
+		# Revert to SCHEDULED if possible, otherwise APPROVED
+		appointment.status = "SCHEDULED"
+		appointment.confirmed_arrival_at = None
+		appointment.save()
+		return Response(self.get_serializer(appointment).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_slot(self, request, pk=None):
+		"""Donor confirms the hospital-approved appointment slot after payment"""
+		appointment = self.get_object()
+		
+		if not appointment.is_paid:
+			return Response({"detail": "Please pay the consultation fee first to confirm your slot."}, status=status.HTTP_400_BAD_REQUEST)
+
 		if appointment.status != "APPROVED":
 			return Response({"detail": f"Only approved appointments can be confirmed. Current status: {appointment.status}"}, status=status.HTTP_400_BAD_REQUEST)
 		
 		# Ensure only the owner (donor) can confirm
-		if appointment.donor != request.user and appointment.donation_request.donor != request.user:
+		donor = appointment.donor or (appointment.donation_request.donor if appointment.donation_request else None)
+		if donor != request.user:
 			return Response({"detail": "You are not authorized to confirm this appointment."}, status=status.HTTP_403_FORBIDDEN)
 
 		appointment.status = "SCHEDULED"
@@ -948,6 +1718,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 		with transaction.atomic():
 			appointment.status = "COMPLETED"
 			appointment.notes = request.data.get("notes", appointment.notes)
+			appointment.prescription = request.data.get("prescription", "")
+			appointment.is_prescription_ready = True if appointment.prescription else False
 			appointment.save()
 
 			# Also update linked donation request if exists
@@ -963,7 +1735,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 				patient=donor,
 				hospital=appointment.hospital,
 				doctor=appointment.doctor,
-				visit_purpose="APPOINTMENT",
+				visit_purpose="CONSULTATION",
 				visit_date=visit_date,
 				notes=request.data.get("notes", ""),
 				rewards=request.data.get("rewards", ""),
@@ -1289,28 +2061,6 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
 		if registration.status != "PENDING":
 			return Response({"detail": "Can only reject pending registrations."}, status=status.HTTP_400_BAD_REQUEST)
 
-		registration.status = "REJECTED"
-		registration.save()
-		return Response(self.get_serializer(registration).data)
-
-	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-	def confirm_coming(self, request, pk=None):
-		"""Donor confirms they are coming to the event"""
-		registration = self.get_object()
-		# Only the registered donor can confirm
-		if registration.donor != request.user:
-			return Response({"detail": "You are not authorized to confirm this registration."}, status=status.HTTP_403_FORBIDDEN)
-
-		if registration.status != "APPROVED":
-			return Response({"detail": "Can only confirm coming for approved registrations."}, status=status.HTTP_400_BAD_REQUEST)
-
-		registration.status = "COMING"
-		registration.save()
-		return Response(self.get_serializer(registration).data)
-
-	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-	def donor_cancel(self, request, pk=None):
-		"""Donor cancels their registration"""
 		registration = self.get_object()
 		# Only the registered donor can cancel
 		if registration.donor != request.user:
@@ -1402,6 +2152,7 @@ class MedicalStoreProductViewSet(viewsets.ModelViewSet):
 	queryset = MedicalStoreProduct.objects.select_related("supplier").all().order_by("-created_at")
 	serializer_class = MedicalStoreProductSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+	parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
 
 	def get_queryset(self):
 		queryset = super().get_queryset()
@@ -1428,6 +2179,7 @@ class MedicalEquipmentViewSet(viewsets.ModelViewSet):
 	queryset = MedicalEquipment.objects.select_related("supplier").all().order_by("-created_at")
 	serializer_class = MedicalEquipmentSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+	parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
 
 	def get_queryset(self):
 		queryset = super().get_queryset()
@@ -1451,7 +2203,7 @@ class MedicalEquipmentViewSet(viewsets.ModelViewSet):
 
 
 class MedicalOrderViewSet(viewsets.ModelViewSet):
-	queryset = MedicalOrder.objects.select_related("customer", "supplier").prefetch_related("items").all().order_by("-created_at")
+	queryset = MedicalOrder.objects.select_related("user", "supplier").prefetch_related("items").all().order_by("-created_at")
 	serializer_class = MedicalOrderSerializer
 	permission_classes = [permissions.IsAuthenticated]
 
@@ -1459,7 +2211,7 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 		queryset = super().get_queryset()
 		# Filter by customer (for buyers)
 		if self.request.query_params.get("my_orders") == "true":
-			queryset = queryset.filter(customer=self.request.user)
+			queryset = queryset.filter(user=self.request.user)
 		# Filter by supplier (for suppliers)
 		if self.request.query_params.get("supplier_orders") == "true":
 			try:
@@ -1481,7 +2233,7 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 	def create_order(self, request):
 		"""Create an order with items"""
 		data = request.data.copy()
-		data["customer_id"] = request.user.pk
+		data["user_id"] = request.user.pk
 
 		# Validate items
 		items_data = data.get("items", [])
@@ -1532,6 +2284,30 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 				except MedicalEquipment.DoesNotExist:
 					return Response({"detail": "Equipment not found."}, status=status.HTTP_404_NOT_FOUND)
 
+		# Handle coupon discount
+		coupon_code = data.get("coupon_code")
+		applied_coupon = None
+		discount_amount = 0
+		
+		if coupon_code:
+			try:
+				coupon = DonorCoupon.objects.get(code=coupon_code, donor=request.user)
+				
+				# Validate coupon
+				if coupon.is_used:
+					return Response({"detail": "This coupon has already been used."}, status=status.HTTP_400_BAD_REQUEST)
+				
+				# Apply discount
+				discount_amount = total_amount * (coupon.discount_percentage / 100)
+				total_amount = total_amount - discount_amount
+				applied_coupon = coupon
+				data["discount_percentage"] = coupon.discount_percentage
+				
+			except DonorCoupon.DoesNotExist:
+				return Response({"detail": "Invalid coupon code or coupon does not belong to you."}, status=status.HTTP_400_BAD_REQUEST)
+		else:
+			data["discount_percentage"] = 0
+
 		# Get supplier from first item
 		if order_items:
 			first_item = order_items[0]
@@ -1571,7 +2347,20 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 				equipment.quantity_available -= item_data["quantity"]
 				equipment.save()
 
-		return Response(self.get_serializer(order).data, status=status.HTTP_201_CREATED)
+		# Mark coupon as used if it was applied
+		if applied_coupon:
+			applied_coupon.is_used = True
+			applied_coupon.save()
+
+		response_data = self.get_serializer(order).data
+		if applied_coupon:
+			response_data["coupon_applied"] = {
+				"code": applied_coupon.code,
+				"discount_percentage": applied_coupon.discount_percentage,
+				"discount_amount": float(discount_amount)
+			}
+
+		return Response(response_data, status=status.HTTP_201_CREATED)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def update_status(self, request, pk=None):
@@ -1590,10 +2379,332 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 		except MedicalEssential.DoesNotExist:
 			return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
+		# Enforce transition to DELIVERED only from RECEIVED
+		if new_status == "DELIVERED" and order.status != "RECEIVED":
+			return Response({
+				"detail": "Order can only be marked as Delivered after it has been marked as Received by the hospital."
+			}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Advanced Verification: If order is PAID (APPROVED), supplier MUST view invoice before shipping/delivering
+		if order.status == "APPROVED" and new_status in ["SHIPPED", "DELIVERED", "CONFIRMED"]:
+			if not hasattr(order, 'invoice') or not order.invoice.is_viewed_by_supplier:
+				return Response({
+					"detail": "You must view the invoice/receipt before accepting or shipping this paid order."
+				}, status=status.HTTP_400_BAD_REQUEST)
+
 		order.status = new_status
 		order.save()
 
 		return Response(self.get_serializer(order).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_shipped(self, request, pk=None):
+		"""Mark order as shipped with date and time"""
+		order = self.get_object()
+		
+		# Verify supplier
+		try:
+			supplier = MedicalEssential.objects.get(user=request.user)
+			if order.supplier != supplier:
+				return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+		except MedicalEssential.DoesNotExist:
+			return Response({"detail": "Not a supplier"}, status=status.HTTP_403_FORBIDDEN)
+
+		if order.status != "APPROVED":
+			return Response({"detail": "Only paid orders can be shipped."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		if not order.invoice.is_viewed_by_supplier:
+			return Response({"detail": "View invoice first."}, status=status.HTTP_400_BAD_REQUEST)
+
+		order.status = "SHIPPED"
+		order.actual_shipping_at = request.data.get("actual_shipping_at")
+		order.estimated_arrival_at = request.data.get("estimated_arrival_at")
+		order.save()
+
+		return Response(self.get_serializer(order).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_received(self, request, pk=None):
+		"""Hospital marks order as received and provides a rating"""
+		order = self.get_object()
+		
+		if order.user != request.user:
+			return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+		if order.status != "SHIPPED":
+			return Response({"detail": "Only shipped orders can be marked as received."}, status=status.HTTP_400_BAD_REQUEST)
+
+		rating = request.data.get("rating")
+		if rating:
+			order.rating = int(rating)
+		
+		order.status = "RECEIVED"
+		order.save()
+
+		return Response({
+			"status": "Order successfull",
+			"message": "Shipping successfull",
+			"order": self.get_serializer(order).data
+		})
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_dispensed(self, request, pk=None):
+		"""Medical store marks order as dispensed (given to donor)"""
+		order = self.get_object()
+		
+		# Verify user is the supplier
+		try:
+			supplier = MedicalEssential.objects.get(user=request.user)
+			if order.supplier != supplier:
+				return Response({"detail": "You can only dispense your own orders."}, status=status.HTTP_403_FORBIDDEN)
+		except MedicalEssential.DoesNotExist:
+			return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+		# Allow dispensing from PENDING, APPROVED, CONFIRMED, or SHIPPED status
+		allowed_statuses = ["PENDING", "APPROVED", "CONFIRMED", "SHIPPED"]
+		if order.status not in allowed_statuses:
+			return Response({"detail": f"Cannot dispense order with status '{order.status}'. Must be one of: {', '.join(allowed_statuses)}."}, status=status.HTTP_400_BAD_REQUEST)
+
+		order.status = "DISPENSED"
+		order.save()
+
+		return Response(self.get_serializer(order).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_receipt(self, request, pk=None):
+		"""Donor confirms they have received the dispensed medicine"""
+		order = self.get_object()
+		
+		if order.user != request.user:
+			return Response({"detail": "You can only confirm your own orders."}, status=status.HTTP_403_FORBIDDEN)
+
+		if order.status != "DISPENSED":
+			return Response({"detail": "Order must be dispensed before you can confirm receipt."}, status=status.HTTP_400_BAD_REQUEST)
+
+		order.status = "RECEIVED"
+		order.save()
+
+		return Response(self.get_serializer(order).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def mark_invoice_viewed(self, request, pk=None):
+		"""Mark the invoice as viewed by the supplier"""
+		order = self.get_object()
+		
+		# Verify user is the supplier
+		try:
+			supplier = MedicalEssential.objects.get(user=request.user)
+			if order.supplier != supplier:
+				return Response({"detail": "You can only view invoices for your own orders."}, status=status.HTTP_403_FORBIDDEN)
+		except MedicalEssential.DoesNotExist:
+			return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+		if not hasattr(order, 'invoice'):
+			return Response({"detail": "Invoice not found."}, status=status.HTTP_404_NOT_FOUND)
+
+		invoice = order.invoice
+		invoice.is_viewed_by_supplier = True
+		invoice.save()
+
+		return Response({"status": "Invoice marked as viewed", "invoice": InvoiceSerializer(invoice).data})
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def pay(self, request, pk=None):
+		"""Simulate payment for the order and generate invoice"""
+		order = self.get_object()
+
+		if order.user != request.user:
+			return Response({"detail": "You can only pay for your own orders."}, status=status.HTTP_403_FORBIDDEN)
+
+		if order.status != "PENDING":
+			return Response({"detail": "Only pending orders can be paid."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Simulate payment success
+		order.status = "APPROVED"
+		order.save()
+
+		# Create Invoice
+		if hasattr(order, 'invoice'):
+			invoice = order.invoice
+		else:
+			from django.utils import timezone
+			invoice = Invoice.objects.create(
+				medical_order=order,
+				total_amount=order.total_amount,
+				currency=order.currency,
+				subtotal=order.total_amount, # Simplified
+				is_paid=True,
+				payment_date=timezone.now().date()
+			)
+
+		return Response({
+			"message": "Payment successful!",
+			"invoice": InvoiceSerializer(invoice).data,
+			"order": self.get_serializer(order).data
+		})
+
+	@action(detail=True, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+	def download_invoice(self, request, pk=None):
+		"""Generate and download protected PDF invoice"""
+		from django.http import HttpResponse
+		from reportlab.lib.pagesizes import letter
+		from reportlab.lib import colors
+		from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+		from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+		from reportlab.lib.units import inch
+		from io import BytesIO
+		
+		order = self.get_object()
+		
+		# Check if invoice exists
+		if not hasattr(order, 'invoice'):
+			return Response({"detail": "Invoice not found for this order."}, status=status.HTTP_404_NOT_FOUND)
+		
+		invoice = order.invoice
+		
+		# Create PDF in memory
+		buffer = BytesIO()
+		doc = SimpleDocTemplate(buffer, pagesize=letter)
+		elements = []
+		styles = getSampleStyleSheet()
+		
+		# Title
+		title_style = ParagraphStyle(
+			'CustomTitle',
+			parent=styles['Heading1'],
+			fontSize=24,
+			textColor=colors.HexColor('#E91E63'),
+			spaceAfter=30,
+		)
+		elements.append(Paragraph("INVOICE", title_style))
+		elements.append(Spacer(1, 0.2*inch))
+		
+		# Invoice Details
+		invoice_data = [
+			['Invoice Number:', invoice.invoice_number],
+			['Invoice Date:', invoice.created_at.strftime('%Y-%m-%d %H:%M')],
+			['Payment Status:', 'PAID' if invoice.is_paid else 'UNPAID'],
+			['Payment Date:', invoice.payment_date.strftime('%Y-%m-%d') if invoice.payment_date else 'N/A'],
+		]
+		
+		invoice_table = Table(invoice_data, colWidths=[2*inch, 3*inch])
+		invoice_table.setStyle(TableStyle([
+			('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F6D6E3')),
+			('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+			('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+			('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+			('FONTSIZE', (0, 0), (-1, -1), 10),
+			('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+			('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#E91E63')),
+		]))
+		elements.append(invoice_table)
+		elements.append(Spacer(1, 0.3*inch))
+		
+		# Hospital Details
+		elements.append(Paragraph(f"<b>Hospital Details:</b>", styles['Heading2']))
+		hospital_user = order.user
+		hospital_profile = hospital_user.hospital_accounts.first() if hospital_user else None
+		hospital_data = [
+			['Name:', hospital_profile.name if hospital_profile else hospital_user.email],
+			['Address:', order.shipping_address],
+			['City:', order.shipping_city],
+			['Contact:', order.contact_phone],
+		]
+		hospital_table = Table(hospital_data, colWidths=[1.5*inch, 4*inch])
+		hospital_table.setStyle(TableStyle([
+			('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+			('FONTSIZE', (0, 0), (-1, -1), 10),
+			('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+		]))
+		elements.append(hospital_table)
+		elements.append(Spacer(1, 0.2*inch))
+		
+		# Supplier Details
+		elements.append(Paragraph(f"<b>Supplier Details:</b>", styles['Heading2']))
+		supplier_data = [
+			['Company:', order.supplier.company_name],
+			['Business Type:', order.supplier.business_type],
+			['Contact:', order.supplier.contact_phone or 'N/A'],
+			['Email:', order.supplier.contact_email or 'N/A'],
+		]
+		supplier_table = Table(supplier_data, colWidths=[1.5*inch, 4*inch])
+		supplier_table.setStyle(TableStyle([
+			('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+			('FONTSIZE', (0, 0), (-1, -1), 10),
+			('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+		]))
+		elements.append(supplier_table)
+		elements.append(Spacer(1, 0.3*inch))
+		
+		# Items Table
+		elements.append(Paragraph(f"<b>Order Items:</b>", styles['Heading2']))
+		items_data = [['Item', 'Quantity', 'Unit Price', 'Amount']]
+		
+		for item in order.items.all():
+			item_name = item.store_product.name if item.store_product else item.equipment.name
+			items_data.append([
+				item_name,
+				str(item.quantity),
+				f"${item.unit_price}",
+				f"${item.subtotal}"
+			])
+		
+		# Add total row
+		items_data.append(['', '', 'TOTAL:', f"${order.total_amount}"])
+		
+		items_table = Table(items_data, colWidths=[3*inch, 1*inch, 1*inch, 1*inch])
+		items_table.setStyle(TableStyle([
+			('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E91E63')),
+			('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+			('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+			('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+			('FONTSIZE', (0, 0), (-1, 0), 12),
+			('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+			('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+			('FONTSIZE', (0, -1), (-1, -1), 12),
+			('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#F6D6E3')),
+			('GRID', (0, 0), (-1, -1), 1, colors.black),
+		]))
+		elements.append(items_table)
+		
+		# Build PDF with security
+		doc.build(elements)
+		
+		# Get PDF content
+		pdf_content = buffer.getvalue()
+		buffer.close()
+		
+		# Apply PDF protection (prevent editing and copying)
+		try:
+			from PyPDF2 import PdfReader, PdfWriter
+			from io import BytesIO as BytesIO2
+			
+			reader = PdfReader(BytesIO2(pdf_content))
+			writer = PdfWriter()
+			
+			for page in reader.pages:
+				writer.add_page(page)
+			
+			# Apply protection: no editing, no copying
+			writer.encrypt(
+				user_password="",  # Empty password for viewing
+				owner_password=None,  # No owner password needed
+				permissions_flag=0b0000000000000000  # No permissions (can't edit, copy, print)
+			)
+			
+			protected_buffer = BytesIO2()
+			writer.write(protected_buffer)
+			pdf_content = protected_buffer.getvalue()
+			protected_buffer.close()
+		except ImportError:
+			# PyPDF2 not installed, return unprotected PDF
+			pass
+		
+		# Return PDF response
+		response = HttpResponse(pdf_content, content_type='application/pdf')
+		response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'
+		return response
+
 
 
 class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
@@ -1834,3 +2945,153 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 			queryset = queryset.filter(equipment_order__supplier_id=supplier_id)
 		return queryset
 
+
+class DeceasedDonorRequestViewSet(viewsets.ModelViewSet):
+	queryset = DeceasedDonorRequest.objects.select_related("user", "processed_by", "hospital_referred").prefetch_related("selected_hospitals").all().order_by("-created_at")
+	serializer_class = DeceasedDonorRequestSerializer
+	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+	def get_queryset(self):
+		queryset = super().get_queryset()
+		# Filter by user (requester)
+		if self.request.query_params.get("user") == "me":
+			if self.request.user.is_authenticated:
+				queryset = queryset.filter(user=self.request.user)
+			else:
+				return DeceasedDonorRequest.objects.none()
+		
+		# Filter by hospital
+		hospital_id = self.request.query_params.get("hospital")
+		if hospital_id:
+			# Show if hospital is in selected_hospitals or is the referred one
+			queryset = queryset.filter(Q(selected_hospitals__id=hospital_id) | Q(hospital_referred_id=hospital_id) | Q(hospital_name__icontains=Hospital.objects.get(id=hospital_id).name if Hospital.objects.filter(id=hospital_id).exists() else "ZZXZXZ")).distinct()
+			
+		return queryset
+
+	def perform_create(self, serializer):
+		if self.request.user.is_authenticated:
+			serializer.save(user=self.request.user)
+		else:
+			serializer.save()
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def cancel(self, request, pk=None):
+		instance = self.get_object()
+		if instance.user != request.user:
+			return Response({"detail": "Not authorized to cancel this request."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if instance.status not in ["PENDING", "APPROVED"]:
+			return Response({"detail": "Cannot cancel a processed request."}, status=status.HTTP_400_BAD_REQUEST)
+
+		instance.status = "CANCELLED"
+		instance.save()
+		return Response(self.get_serializer(instance).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def process_request(self, request, pk=None):
+		"""Hospital accepts/rejects"""
+		instance = self.get_object()
+		decision = request.data.get("decision") # APPROVED / REJECTED / COMPLETED
+		notes = request.data.get("notes", "")
+
+		# Check hospital auth
+		hospital = getattr(request.user, 'hospital_profile', None)
+		if not hospital:
+			return Response({"detail": "Only hospitals can process requests."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if decision not in ["APPROVED", "REJECTED", "COMPLETED"]:
+			return Response({"detail": "Invalid decision."}, status=status.HTTP_400_BAD_REQUEST)
+
+		instance.status = decision
+		instance.processed_by = request.user
+		instance.processed_at = timezone.now()
+		if notes:
+			instance.processing_notes = notes
+		if decision == "APPROVED":
+			instance.hospital_referred = hospital # The hospital taking ownership
+		instance.save()
+		return Response(self.get_serializer(instance).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_ambulance(self, request, pk=None):
+		"""User confirms ambulance arrival"""
+		instance = self.get_object()
+		if instance.user != request.user:
+			return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if instance.status != "APPROVED":
+			return Response({"detail": "Ambulance not yet dispatched (Request not approved)."}, status=status.HTTP_400_BAD_REQUEST)
+
+		instance.status = "COMPLETED"
+		instance.save()
+		return Response(self.get_serializer(instance).data)
+
+
+class AmbulanceRequestViewSet(viewsets.ModelViewSet):
+    queryset = AmbulanceRequest.objects.all()
+    serializer_class = AmbulanceRequestSerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'public_life_savers']:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_authenticated and user.role == UserRoles.HOSPITAL:
+             # Hospitals see requests directed to them
+             return AmbulanceRequest.objects.filter(hospital__user=user).order_by('-created_at')
+        elif user.is_authenticated:
+             # Users see their own requests
+             return AmbulanceRequest.objects.filter(reporter=user).order_by('-created_at')
+        return AmbulanceRequest.objects.none()
+
+    def perform_create(self, serializer):
+        reporter = self.request.user if self.request.user.is_authenticated else None
+        serializer.save(reporter=reporter)
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        ambulance_req = self.get_object()
+        if ambulance_req.status != 'PENDING':
+            return Response({'detail': 'Request is not pending'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ambulance_req.status = 'ACCEPTED'
+        ambulance_req.save()
+        return Response({'status': 'assigned', 'message': 'Ambulance dispatched!'})
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        ambulance_req = self.get_object()
+        if ambulance_req.status == 'COMPLETED':
+             return Response({'detail': 'Already completed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ambulance_req.status = 'COMPLETED'
+        
+        # Reward Logic
+        if not ambulance_req.is_rewarded and ambulance_req.reporter:
+            try:
+                profile = ambulance_req.reporter.donor_profile
+                profile.current_stars += 1
+                profile.save()
+                ambulance_req.is_rewarded = True
+            except Exception:
+                pass
+        
+        ambulance_req.save()
+        return Response({'status': 'completed', 'message': 'Life saved! Reward star to reporter.'})
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
+    def public_life_savers(self, request):
+        """Public list of completed saves with reporter names and hospitals"""
+        saves = AmbulanceRequest.objects.filter(status='COMPLETED').order_by('-updated_at')[:10]
+        data = []
+        for save in saves:
+            data.append({
+                'id': save.id,
+                'reporter_name': save.reporter.get_full_name() if save.reporter else "Anonymous Hero",
+                'hospital_name': save.hospital.name,
+                'location': save.location,
+                'time': save.updated_at
+            })
+        return Response(data)

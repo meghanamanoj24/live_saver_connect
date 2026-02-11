@@ -37,6 +37,7 @@ from core.views import (
 	CustomTokenObtainPairView,
 	MetricsOverviewView,
 	DonorCouponViewSet,
+	AmbulanceRequestViewSet,
 )
 from core.views_user import ManageUserView
 
@@ -71,6 +72,7 @@ router.register(r"equipment-needs", EquipmentNeedViewSet)
 router.register(r"equipment-orders", EquipmentOrderViewSet)
 router.register(r"invoices", InvoiceViewSet)
 router.register(r"donor-coupons", DonorCouponViewSet, basename="donor-coupons")
+router.register(r"ambulance-requests", AmbulanceRequestViewSet)
 
 urlpatterns = [
 	path("admin/", admin.site.urls),

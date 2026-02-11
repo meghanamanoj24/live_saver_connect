@@ -9,4 +9,5 @@ class ManageUserView(APIView):
 
     def get(self, request):
         serializer = UserPublicSerializer(request.user)
+        print(f"DEBUG: ManageUserView - Sending user data: {serializer.data}")
         return Response(serializer.data)

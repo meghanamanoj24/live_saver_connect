@@ -19,6 +19,7 @@ export default function NeedDetails() {
             setError(null)
             try {
                 // We assume these are hospital needs based on the index page
+                if (id === "post") return
                 const data = await apiFetch(`/hospital-needs/${id}/`)
                 setNeed(data)
             } catch (err) {
@@ -33,6 +34,7 @@ export default function NeedDetails() {
     }, [id])
 
     if (loading) {
+        if (id === "post") return null
         return (
             <div className="min-h-screen bg-[#1A1A2E] flex items-center justify-center">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#E91E63]"></div>
@@ -86,14 +88,14 @@ export default function NeedDetails() {
 
                     {/* Status Banner */}
                     <div className={`rounded-xl border p-4 flex items-center justify-between ${need.status === "URGENT" || need.status === "CRITICAL"
-                            ? "bg-red-500/10 border-red-500/30 text-red-200"
-                            : need.status === "FULFILLED"
-                                ? "bg-green-500/10 border-green-500/30 text-green-200"
-                                : "bg-blue-500/10 border-blue-500/30 text-blue-200"
+                        ? "bg-red-500/10 border-red-500/30 text-red-200"
+                        : need.status === "FULFILLED"
+                            ? "bg-green-500/10 border-green-500/30 text-green-200"
+                            : "bg-blue-500/10 border-blue-500/30 text-blue-200"
                         }`}>
                         <div className="flex items-center gap-2">
                             <span className={`h-2.5 w-2.5 rounded-full ${need.status === "URGENT" || need.status === "CRITICAL" ? "bg-red-500 animate-pulse" :
-                                    need.status === "FULFILLED" ? "bg-green-500" : "bg-blue-500"
+                                need.status === "FULFILLED" ? "bg-green-500" : "bg-blue-500"
                                 }`} />
                             <span className="font-semibold tracking-wide uppercase text-sm">
                                 {need.status || "OPEN"} Request
@@ -219,7 +221,7 @@ export default function NeedDetails() {
                                         <div className="pt-4 mt-2 border-t border-white/10">
                                             <Link href={`/donor/donate?type=${need.need_type}&hospital_id=${need.hospital.id}`} legacyBehavior>
                                                 <a className="flex w-full items-center justify-center rounded-lg bg-[#E91E63] py-3 text-sm font-bold text-white shadow-lg shadow-pink-500/30 transition hover:bg-[#D81B60] hover:scale-[1.02]">
-                                                    Resond to Need
+                                                    Respond to Need
                                                 </a>
                                             </Link>
                                             {need.hospital.phone && (

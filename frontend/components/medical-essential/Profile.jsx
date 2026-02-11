@@ -175,28 +175,7 @@ export default function Profile({ profile, onUpdate }) {
 					</div>
 				</div>
 
-				{/* API Key Section */}
-				<div className="p-4 rounded-lg border border-[#F6D6E3] bg-[#131326]">
-					<label className="block text-sm font-medium mb-2">API Key</label>
-					<div className="flex items-center gap-2">
-						<input
-							type="text"
-							readOnly
-							value={formData.api_key || ""}
-							className="flex-1 px-4 py-2 rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] text-white font-mono text-sm"
-						/>
-						<button
-							type="button"
-							onClick={handleRegenerateApiKey}
-							className="px-4 py-2 bg-yellow-600/20 border border-yellow-600/40 rounded-lg text-yellow-400 hover:bg-yellow-600/30"
-						>
-							Regenerate
-						</button>
-					</div>
-					<p className="text-xs text-pink-100/70 mt-2">
-						Use this API key for programmatic access to your Medical Essential account.
-					</p>
-				</div>
+
 
 				<button
 					type="submit"

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { apiFetch } from "../../lib/api"
 import MedicalStore from "../../components/medical-essential/MedicalStore"
 import Equipment from "../../components/medical-essential/Equipment"
+import Orders from "../../components/medical-essential/Orders"
 import Profile from "../../components/medical-essential/Profile"
 
 export default function MedicalEssentialDashboard() {
@@ -88,11 +89,6 @@ export default function MedicalEssentialDashboard() {
 							)}
 						</div>
 						<div className="flex items-center gap-4">
-							{profile?.api_key && (
-								<div className="text-xs bg-[#1A1A2E] px-3 py-1 rounded border border-[#F6D6E3]/20">
-									API: {profile.api_key.substring(0, 12)}...
-								</div>
-							)}
 							<button
 								onClick={handleLogout}
 								className="px-4 py-2 text-sm bg-red-600/20 border border-red-600/40 rounded-lg hover:bg-red-600/30"
@@ -108,31 +104,37 @@ export default function MedicalEssentialDashboard() {
 					<div className="flex gap-2 border-b border-[#F6D6E3]/20 mb-6">
 						<button
 							onClick={() => setActiveTab("store")}
-							className={`px-6 py-3 font-medium transition-colors ${
-								activeTab === "store"
-									? "border-b-2 border-[#E91E63] text-[#E91E63]"
-									: "text-pink-100/70 hover:text-white"
-							}`}
+							className={`px-6 py-3 font-medium transition-colors ${activeTab === "store"
+								? "border-b-2 border-[#E91E63] text-[#E91E63]"
+								: "text-pink-100/70 hover:text-white"
+								}`}
 						>
 							Medical Store
 						</button>
 						<button
 							onClick={() => setActiveTab("equipment")}
-							className={`px-6 py-3 font-medium transition-colors ${
-								activeTab === "equipment"
-									? "border-b-2 border-[#E91E63] text-[#E91E63]"
-									: "text-pink-100/70 hover:text-white"
-							}`}
+							className={`px-6 py-3 font-medium transition-colors ${activeTab === "equipment"
+								? "border-b-2 border-[#E91E63] text-[#E91E63]"
+								: "text-pink-100/70 hover:text-white"
+								}`}
 						>
 							Equipment
 						</button>
 						<button
+							onClick={() => setActiveTab("orders")}
+							className={`px-6 py-3 font-medium transition-colors ${activeTab === "orders"
+								? "border-b-2 border-[#E91E63] text-[#E91E63]"
+								: "text-pink-100/70 hover:text-white"
+								}`}
+						>
+							Orders
+						</button>
+						<button
 							onClick={() => setActiveTab("profile")}
-							className={`px-6 py-3 font-medium transition-colors ${
-								activeTab === "profile"
-									? "border-b-2 border-[#E91E63] text-[#E91E63]"
-									: "text-pink-100/70 hover:text-white"
-							}`}
+							className={`px-6 py-3 font-medium transition-colors ${activeTab === "profile"
+								? "border-b-2 border-[#E91E63] text-[#E91E63]"
+								: "text-pink-100/70 hover:text-white"
+								}`}
 						>
 							Profile
 						</button>
@@ -141,6 +143,7 @@ export default function MedicalEssentialDashboard() {
 					{/* Tab Content */}
 					{activeTab === "store" && <MedicalStore profile={profile} />}
 					{activeTab === "equipment" && <Equipment profile={profile} />}
+					{activeTab === "orders" && <Orders profile={profile} />}
 					{activeTab === "profile" && <Profile profile={profile} onUpdate={loadProfile} />}
 				</div>
 			</main>

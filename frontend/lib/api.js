@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = "http://localhost:8000/api"
+const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000/api"
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL
 
@@ -84,7 +84,7 @@ export async function apiFetch(path, options = {}) {
 	const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`
 	const headers = new Headers(options.headers || {})
 
-	if (!headers.has("Content-Type") && options.body) {
+	if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
 		headers.set("Content-Type", "application/json")
 	}
 
@@ -111,23 +111,28 @@ export async function apiFetch(path, options = {}) {
 	const response = await fetch(url, {
 		...options,
 		headers,
+	}).catch(err => {
+		if (err.message === "Failed to fetch") {
+			throw new Error("Cannot connect to the backend server. Please ensure your Django server is running on port 8000.")
+		}
+		throw err
 	})
 
 	if (response.status === 204) {
 		return null
 	}
 
-	let payload = null
-	const text = await response.text()
-	if (text) {
-		try {
-			payload = JSON.parse(text)
-		} catch (error) {
-			// fall through - payload remains null for non-JSON responses
-		}
-	}
-
 	if (!response.ok) {
+		let payload = null
+		const text = await response.text()
+		if (text) {
+			try {
+				payload = JSON.parse(text)
+			} catch (error) {
+				// fall through
+			}
+		}
+
 		// Auto-handle invalid/expired tokens with refresh + retry
 		if ((response.status === 401 || response.status === 403) && !options._retry) {
 			try {
@@ -141,12 +146,17 @@ export async function apiFetch(path, options = {}) {
 				if (typeof window !== "undefined") {
 					const alreadyRedirecting = sessionStorage.getItem("lifesaver:auth_redirecting") === "1"
 					const onAuthPage = window.location.pathname.startsWith("/auth")
-					if (!onAuthPage && !alreadyRedirecting) {
-						const isHospitalPage = window.location.pathname.includes("/hospital")
-						sessionStorage.setItem("lifesaver:auth_redirecting", "1")
-						window.location.href = `/auth/login?module=${isHospitalPage ? "hospital" : "donor"}`
-						return
+
+					if (onAuthPage || alreadyRedirecting) {
+						// Return a pending promise that never resolves to avoid throwing 
+						// while we are already redirecting or on the login page.
+						return new Promise(() => { });
 					}
+
+					const isHospitalPage = window.location.pathname.includes("/hospital")
+					sessionStorage.setItem("lifesaver:auth_redirecting", "1")
+					window.location.href = `/auth/login?module=${isHospitalPage ? "hospital" : "donor"}`
+					return new Promise(() => { });
 				}
 				throw refreshErr
 			}
@@ -161,6 +171,23 @@ export async function apiFetch(path, options = {}) {
 		error.body = payload
 		throw error
 	}
+
+	if (options.responseAs === "blob") {
+		return response.blob()
+	}
+
+	let payload = null
+	const text = await response.text()
+	if (text) {
+		try {
+			payload = JSON.parse(text)
+		} catch (error) {
+			// fall through - returning text if not JSON
+			return text
+		}
+	}
+
+	return payload
 
 	return payload
 }

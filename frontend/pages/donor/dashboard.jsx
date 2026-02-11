@@ -76,6 +76,7 @@ export default function DonorDashboard() {
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
 	const [emergencyNeeds, setEmergencyNeeds] = useState([])
+	const [matchedNeeds, setMatchedNeeds] = useState([])
 	const [accidentAlerts, setAccidentAlerts] = useState([])
 	const [loadingEmergencies, setLoadingEmergencies] = useState(true)
 
@@ -125,6 +126,7 @@ export default function DonorDashboard() {
 	})
 	const [isSubmittingDeceased, setIsSubmittingDeceased] = useState(false)
 	const [urgentOrganNeeds, setUrgentOrganNeeds] = useState([])
+	const [appointments, setAppointments] = useState([])
 	const [userLocation, setUserLocation] = useState(null)
 	const SHOW_ORGAN_SECTION = false
 
@@ -224,7 +226,17 @@ export default function DonorDashboard() {
 		loadDonationRequests()
 		loadOrganRegistryData()
 		loadEmergencies()
+		loadAppointments()
 	}, [fetchDashboard])
+
+	async function loadAppointments() {
+		try {
+			const data = await apiFetch("/appointments/?status=COMPLETED")
+			setAppointments(data)
+		} catch (error) {
+			console.error("Error loading appointments:", error)
+		}
+	}
 
 	// Load user location
 	useEffect(() => {
@@ -290,10 +302,22 @@ export default function DonorDashboard() {
 	async function loadEmergencies() {
 		setLoadingEmergencies(true)
 		try {
-			const needs = await apiFetch("/needs/?status=OPEN")
+			const [needs, matches] = await Promise.all([
+				apiFetch("/needs/?status=OPEN"),
+				apiFetch("/needs/matched_needs/")
+			])
 			setEmergencyNeeds(Array.isArray(needs) ? needs.slice(0, 5) : [])
+			setMatchedNeeds(Array.isArray(matches) ? matches : [])
 		} catch {
 			setEmergencyNeeds([])
+			setMatchedNeeds([])
+		}
+
+		try {
+			const matches = await apiFetch("/needs/matched_needs/")
+			setMatchedNeeds(Array.isArray(matches) ? matches : [])
+		} catch {
+			setMatchedNeeds([])
 		}
 
 		try {
@@ -898,6 +922,62 @@ export default function DonorDashboard() {
 						</div>
 					</div>
 
+					{/* Critical Matches Section */}
+					{matchedNeeds.length > 0 && (
+						<div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-700">
+							<div className="flex items-center justify-between mb-6">
+								<div>
+									<h2 className="text-xl font-bold flex items-center gap-3 text-white">
+										<span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-500 animate-pulse">
+											🚨
+										</span>
+										Critical Matches Near You
+									</h2>
+									<div className="flex items-center gap-2 mt-1">
+										<span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+										<p className="text-xs text-pink-100/60">Filtered by your City and Blood Compatibility</p>
+									</div>
+								</div>
+							</div>
+
+							<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+								{matchedNeeds.map((need) => (
+									<div key={need.id} className="group relative bg-[#1A1A2E] border border-red-500/30 hover:border-red-500/60 rounded-2xl p-5 transition-all hover:shadow-[0_0_20px_rgba(233,30,99,0.1)]">
+										<div className="absolute top-0 right-0 p-3">
+											<span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${need.need_type === 'BLOOD' ? 'bg-red-500/20 text-red-400' :
+												need.need_type === 'PLATELETS' ? 'bg-orange-500/20 text-orange-400' :
+													'bg-purple-500/20 text-purple-400'
+												}`}>
+												{need.need_type}
+											</span>
+										</div>
+
+										<h3 className="text-sm font-bold text-white mb-2 line-clamp-1">{need.title}</h3>
+										<div className="flex items-center gap-3 mb-3">
+											<div className="h-10 w-10 rounded-xl bg-white/5 flex flex-col items-center justify-center border border-white/10 flex-shrink-0">
+												<span className="text-[8px] text-pink-100/40 font-medium uppercase">GRP</span>
+												<span className="text-xs font-bold text-red-500">{need.required_blood_group || 'Any'}</span>
+											</div>
+											<div className="min-w-0">
+												<p className="text-[10px] text-pink-100/60 flex items-center gap-1 truncate">
+													📍 {need.city}
+												</p>
+												<p className="text-[10px] text-pink-100/60 mt-0.5 truncate">
+													📞 {need.contact_phone}
+												</p>
+											</div>
+										</div>
+										<Link href={`/needs/${need.id}`} legacyBehavior>
+											<a className="w-full py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-2 transition-all">
+												Help Now ↗
+											</a>
+										</Link>
+									</div>
+								))}
+							</div>
+						</div>
+					)}
+
 					{/* Recent Activity / Requests Section */}
 					<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
 						<div className="flex items-center justify-between mb-4">
@@ -947,6 +1027,60 @@ export default function DonorDashboard() {
 						) : (
 							<div className="rounded-xl border border-dashed border-[#F6D6E3]/20 p-6 text-center text-sm text-pink-100/50">
 								No recent requests found. All updates will appear here.
+							</div>
+						)}
+					</div>
+
+					{/* Medical Prescriptions Section */}
+					<div className="rounded-2xl border border-blue-500/30 bg-[#131326] p-6 shadow-lg">
+						<div className="flex items-center justify-between mb-6">
+							<h2 className="text-lg font-black text-white uppercase tracking-widest flex items-center gap-2">
+								<span className="text-blue-400">💊</span> Medical Prescriptions
+							</h2>
+							<Link href="/donor/book-appointment" legacyBehavior>
+								<a className="text-xs font-bold text-blue-400 hover:text-blue-300 transition uppercase tracking-widest">Manage Appointments →</a>
+							</Link>
+						</div>
+
+						{appointments.filter(a => a.is_prescription_ready).length > 0 ? (
+							<div className="grid gap-4 sm:grid-cols-2">
+								{appointments.filter(a => a.is_prescription_ready).slice(0, 4).map((appt) => (
+									<div key={appt.id} className="rounded-xl border border-white/5 bg-[#1A1A2E] p-4 group hover:border-blue-500/30 transition-all">
+										<div className="flex justify-between items-start mb-3">
+											<div>
+												<p className="text-[10px] font-black text-pink-500 uppercase tracking-widest">Clinic</p>
+												<p className="text-sm font-bold text-white">{appt.hospital?.name}</p>
+											</div>
+											<div className="text-right">
+												<p className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Date</p>
+												<p className="text-[10px] text-white font-mono">{new Date(appt.appointment_date).toLocaleDateString()}</p>
+											</div>
+										</div>
+										<div className="p-3 rounded-lg bg-white/5 border border-white/5 mb-3">
+											<p className="text-[10px] text-pink-100/40 uppercase font-black mb-1">Prescription Summary</p>
+											<p className="text-xs text-white line-clamp-2 italic">
+												{appt.prescription || "No summary available."}
+											</p>
+										</div>
+										<div className="flex items-center justify-between">
+											{appt.next_consultation_date && (
+												<div className="flex flex-col">
+													<p className="text-[9px] font-black text-green-500 uppercase tracking-widest">Follow-up</p>
+													<p className="text-[10px] font-bold text-white">{new Date(appt.next_consultation_date).toLocaleDateString()}</p>
+												</div>
+											)}
+											<Link href="/donor/book-appointment" legacyBehavior>
+												<a className="ml-auto rounded-lg bg-blue-600/20 px-3 py-1.5 text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/40 transition border border-blue-500/20">
+													Detailed View
+												</a>
+											</Link>
+										</div>
+									</div>
+								))}
+							</div>
+						) : (
+							<div className="rounded-xl border border-dashed border-white/10 p-8 text-center bg-white/5">
+								<p className="text-xs text-pink-100/30 italic">No medical prescriptions recorded yet. Your prescriptions will appear here after your appointments are completed.</p>
 							</div>
 						)}
 					</div>

@@ -59,9 +59,13 @@ export default function BloodDonation() {
 	const [availabilitySaving, setAvailabilitySaving] = useState(false)
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [donationRequests, setDonationRequests] = useState([])
+	const [emergencyNeeds, setEmergencyNeeds] = useState([])
+	const [matchedNeeds, setMatchedNeeds] = useState([])
+	const [activeTab, setActiveTab] = useState("matches")
 	const [donationHistory, setDonationHistory] = useState([])
 	const [confirmingArrival, setConfirmingArrival] = useState(false)
 	const [coupons, setCoupons] = useState([])
+	const [selectedCoupon, setSelectedCoupon] = useState(null)
 
 	// Verification Loop State
 	const [healthReportUploaded, setHealthReportUploaded] = useState(false)
@@ -103,6 +107,7 @@ export default function BloodDonation() {
 	const [healthAssessment, setHealthAssessment] = useState(null)
 	const [medicineSuggestions, setMedicineSuggestions] = useState([])
 	const [healthHistory, setHealthHistory] = useState([])
+	const [downloadHistory, setDownloadHistory] = useState([])
 
 	// Load profile from localStorage immediately on mount
 	useEffect(() => {
@@ -145,9 +150,26 @@ export default function BloodDonation() {
 		}
 	}, [])
 
+	const loadDownloadHistory = useCallback(async () => {
+		try {
+			const data = await apiFetch("/donors/download_history/?report_type=BLOOD")
+			setDownloadHistory(data)
+		} catch (err) {
+			console.error("Failed to load download history:", err)
+		}
+	}, [])
+
+	const verifiedPdfUrl = useMemo(() => {
+		if (!downloadHistory || downloadHistory.length === 0) return null
+		// The latest one is at the top (sorted by -created_at in backend)
+		return downloadHistory[0].pdf_file
+	}, [downloadHistory])
+
+	// Load initial data
 	useEffect(() => {
-		loadDonorProfile()
-	}, [loadDonorProfile])
+		loadDonorProfile().catch(err => console.log("Init profile load failed:", err))
+		loadDownloadHistory()
+	}, [loadDonorProfile, loadDownloadHistory])
 
 	const fetchDashboard = useCallback(
 		async (showLoader = true) => {
@@ -209,10 +231,20 @@ export default function BloodDonation() {
 		}
 		console.log('RUNNING THIS');
 
-		fetchDashboard()
-		loadDonationRequests()
-		loadDonationHistory()
-		loadCoupons()
+		const init = async () => {
+			try {
+				await fetchDashboard()
+				await Promise.all([
+					loadDonationRequests(),
+					loadEmergencyNeeds(),
+					loadDonationHistory(),
+					loadCoupons()
+				])
+			} catch (err) {
+				console.log("Dashboard init failed:", err)
+			}
+		}
+		init()
 	}, [fetchDashboard])
 
 	// Refresh requests when page becomes visible
@@ -220,6 +252,7 @@ export default function BloodDonation() {
 		const handleVisibilityChange = () => {
 			if (document.visibilityState === "visible") {
 				loadDonationRequests()
+				loadEmergencyNeeds()
 				fetchDashboard(false)
 			}
 		}
@@ -268,6 +301,19 @@ export default function BloodDonation() {
 		}
 	}
 
+	async function loadEmergencyNeeds() {
+		try {
+			const [needs, matches] = await Promise.all([
+				apiFetch("/needs/?status=OPEN&need_type=BLOOD"),
+				apiFetch("/needs/matched_needs/")
+			])
+			setEmergencyNeeds(needs)
+			setMatchedNeeds(matches.filter(m => m.need_type === "BLOOD"))
+		} catch (error) {
+			console.error("Error loading emergency needs:", error)
+		}
+	}
+
 	async function loadDonationHistory() {
 		try {
 			const history = await apiFetch("/patient-visits/?visit_purpose=BLOOD_DONATION")
@@ -283,6 +329,51 @@ export default function BloodDonation() {
 			setCoupons(data)
 		} catch (error) {
 			console.error("Error loading coupons:", error)
+		}
+	}
+
+	// Load selected coupon from localStorage on mount
+	useEffect(() => {
+		const savedCoupon = localStorage.getItem("selected_medical_coupon")
+		if (savedCoupon) {
+			try {
+				setSelectedCoupon(JSON.parse(savedCoupon))
+			} catch (e) {
+				console.error("Failed to parse saved coupon:", e)
+			}
+		}
+	}, [])
+
+	// Persist selected coupon to localStorage
+	useEffect(() => {
+		if (selectedCoupon) {
+			localStorage.setItem("selected_medical_coupon", JSON.stringify(selectedCoupon))
+		} else {
+			localStorage.removeItem("selected_medical_coupon")
+		}
+	}, [selectedCoupon])
+
+	function handleSelectCoupon(coupon) {
+		if (selectedCoupon?.id === coupon.id) {
+			// Deselect if clicking the same coupon
+			setSelectedCoupon(null)
+		} else {
+			setSelectedCoupon(coupon)
+		}
+	}
+
+	const handleDeleteRequest = async (requestId) => {
+		if (!confirm("Are you sure you want to permanently delete this rejected request?")) return
+
+		try {
+			await apiFetch(`/donation-requests/${requestId}/`, {
+				method: "DELETE",
+			})
+			// Refresh requests list
+			setDonationRequests((prev) => prev.filter((r) => r.id !== requestId))
+		} catch (err) {
+			console.error("Error deleting request:", err)
+			alert("Failed to delete the request. Please try again.")
 		}
 	}
 
@@ -460,21 +551,24 @@ export default function BloodDonation() {
 
 		const lastResetId = localStorage.getItem("lifesaver:last_reset_request_id")
 
-		if (["COMPLETED", "REJECTED"].includes(mostRecentRequest.status) && lastResetId !== String(mostRecentRequest.id)) {
+		if (["COMPLETED", "REJECTED", "ACCEPTED"].includes(mostRecentRequest.status) && lastResetId !== String(mostRecentRequest.id)) {
 			// Clear the health report for this cycle - donor must upload a new one
 			localStorage.removeItem(HEALTH_REPORT_STORAGE_KEY_BLOOD)
 			localStorage.removeItem(HEALTH_REPORT_FILENAME_KEY_BLOOD)
+			localStorage.removeItem("lifesaver:health_history") // Clear local history to force new assessment
 			localStorage.setItem("lifesaver:last_reset_request_id", String(mostRecentRequest.id))
+
 			setHealthReportUploaded(false)
 			setHealthReportFile(null)
+			setHealthEligible(false)
+			setHealthAssessment(null)
 		}
 	}, [mostRecentRequest])
 
-	function handleHealthReportUpload(e) {
+	async function handleHealthReportUpload(e) {
 		const file = e.target.files[0]
 		if (!file) return
 
-		// Simulate validation
 		if (file.type !== "application/pdf") {
 			alert("Please upload a PDF file.")
 			return
@@ -485,16 +579,35 @@ export default function BloodDonation() {
 			return
 		}
 
-		setHealthReportFile(file)
-		// Simulate successful upload and verification
-		setTimeout(() => {
-			setHealthReportUploaded(true)
-			localStorage.setItem(HEALTH_REPORT_STORAGE_KEY_BLOOD, "true")
-			localStorage.setItem(HEALTH_REPORT_FILENAME_KEY_BLOOD, file.name)
-			alert("Health report uploaded and verified successfully!")
-			// Scroll to top
-			window.scrollTo({ top: 0, behavior: 'smooth' })
-		}, 1000)
+		try {
+			// Verify integrity with blockchain ledger via backend
+			const formData = new FormData()
+			formData.append('file', file)
+
+			const response = await apiFetch('/donors/verify_health_report/', {
+				method: 'POST',
+				body: formData,
+				// apiFetch usually handles JSON, but for FormData we need to be careful
+				// If apiFetch sets Content-Type automatically, browser will fail to set boundary.
+				// Assuming apiFetch is robust.
+			})
+
+			if (response.valid) {
+				setHealthReportFile(file)
+				setHealthReportUploaded(true)
+				localStorage.setItem(HEALTH_REPORT_STORAGE_KEY_BLOOD, "true")
+				localStorage.setItem(HEALTH_REPORT_FILENAME_KEY_BLOOD, file.name)
+				alert(response.detail || "Health report verified and uploaded successfully!")
+				window.scrollTo({ top: 0, behavior: 'smooth' })
+			} else {
+				alert(`Verification Failed: ${response.detail}`)
+				e.target.value = "" // Reset input
+			}
+		} catch (err) {
+			console.error("Verification Error:", err)
+			alert(err.message || "Error verifying report integrity. Please ensure you are uploading the latest report you downloaded.")
+			e.target.value = "" // Reset input
+		}
 	}
 
 	function handleNewRequestClick(e) {
@@ -677,6 +790,7 @@ export default function BloodDonation() {
 		}
 
 		setHealthAssessment(assessment)
+		setHealthEligible(canDonate)
 		setMedicineSuggestions(medicines)
 
 		// Add to health history
@@ -696,128 +810,45 @@ export default function BloodDonation() {
 	}
 
 	// Generate Health Report PDF
-	function generateHealthReportPDF() {
+	async function generateHealthReportPDF() {
 		if (!healthAssessment || !healthAssessment.canDonate) {
 			alert("You must complete a health assessment and be eligible before downloading the report.")
 			return
 		}
 
-		const doc = new jsPDF()
-		const pageWidth = doc.internal.pageSize.getWidth()
-		const pageHeight = doc.internal.pageSize.getHeight()
+		try {
+			// Call backend to generate secure PDF (No password required)
+			const blob = await apiFetch('/donors/generate_health_report/', {
+				method: 'POST',
+				responseAs: 'blob',
+				body: JSON.stringify({
+					...healthAssessment,
+					age: healthStatus.age,
+					weight: healthStatus.weight
+				})
+			});
+			const url = window.URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
 
-		// Header
-		doc.setFillColor(233, 30, 99) // #E91E63
-		doc.rect(0, 0, pageWidth, 40, 'F')
+			const donorName = displayDonor?.name?.replace(/\s+/g, '_') || 'Donor';
+			const dateStr = new Date().toISOString().split('T')[0];
+			link.setAttribute('download', `Health_Report_${donorName}_${dateStr}.pdf`);
 
-		doc.setTextColor(255, 255, 255)
-		doc.setFontSize(24)
-		doc.setFont(undefined, 'bold')
-		doc.text("HEALTH STATUS REPORT", pageWidth / 2, 20, { align: 'center' })
+			document.body.appendChild(link);
+			link.click();
+			link.parentNode.removeChild(link);
+			window.URL.revokeObjectURL(url);
 
-		doc.setFontSize(12)
-		doc.setFont(undefined, 'normal')
-		doc.text("LifeSaver Connect", pageWidth / 2, 30, { align: 'center' })
-
-		// Reset text color
-		doc.setTextColor(0, 0, 0)
-
-		let yPos = 55
-
-		// Donor Information Section
-		doc.setFontSize(16)
-		doc.setFont(undefined, 'bold')
-		doc.text("Donor Information", 20, yPos)
-		yPos += 10
-
-		doc.setFontSize(11)
-		doc.setFont(undefined, 'normal')
-		doc.text(`Name: ${displayDonor?.name || 'Not provided'}`, 25, yPos)
-		yPos += 7
-		doc.text(`Blood Group: ${displayDonor?.blood_group || 'Not provided'}`, 25, yPos)
-		yPos += 7
-		doc.text(`Age: ${healthStatus.age || 'Not provided'} years`, 25, yPos)
-		yPos += 7
-		doc.text(`Weight: ${healthStatus.weight || 'Not provided'} kg`, 25, yPos)
-		yPos += 15
-
-		// Health Assessment Section
-		doc.setFontSize(16)
-		doc.setFont(undefined, 'bold')
-		doc.text("Health Assessment", 20, yPos)
-		yPos += 10
-
-		doc.setFontSize(11)
-		doc.setFont(undefined, 'normal')
-		doc.text(`Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 25, yPos)
-		yPos += 7
-		doc.text(`Health Score: ${healthAssessment.healthScore}/100`, 25, yPos)
-		yPos += 7
-
-		// Status with color
-		doc.setFont(undefined, 'bold')
-		if (healthAssessment.canDonate) {
-			doc.setTextColor(0, 128, 0) // Green
-			doc.text("Status: ELIGIBLE FOR DONATION", 25, yPos)
-		} else {
-			doc.setTextColor(255, 0, 0) // Red
-			doc.text("Status: NOT ELIGIBLE FOR DONATION", 25, yPos)
+			// Refresh download history
+			loadDownloadHistory()
+			alert("Health report downloaded successfully! This PDF is SECURED: Copying and editing are strictly prohibited.");
+		} catch (err) {
+			console.error("PDF Error:", err);
+			alert(err.message || "Error generating secure report. Please try again.");
 		}
-		doc.setTextColor(0, 0, 0)
-		doc.setFont(undefined, 'normal')
-		yPos += 15
-
-		// Symptoms Section
-		doc.setFontSize(16)
-		doc.setFont(undefined, 'bold')
-		doc.text("Symptoms Reported", 20, yPos)
-		yPos += 10
-
-		doc.setFontSize(11)
-		doc.setFont(undefined, 'normal')
-		if (healthAssessment.symptoms && healthAssessment.symptoms.length > 0) {
-			healthAssessment.symptoms.forEach(symptom => {
-				doc.text(`• ${symptom}`, 25, yPos)
-				yPos += 6
-			})
-		} else {
-			doc.text("No symptoms reported", 25, yPos)
-			yPos += 6
-		}
-		yPos += 10
-
-		// Recommendation Section
-		doc.setFontSize(16)
-		doc.setFont(undefined, 'bold')
-		doc.text("Recommendation", 20, yPos)
-		yPos += 10
-
-		doc.setFontSize(11)
-		doc.setFont(undefined, 'normal')
-		const splitRecommendation = doc.splitTextToSize(healthAssessment.recommendation || healthAssessment.message, pageWidth - 50)
-		doc.text(splitRecommendation, 25, yPos)
-		yPos += splitRecommendation.length * 6 + 15
-
-		// Validity Notice
-		doc.setFillColor(240, 240, 240)
-		doc.rect(20, yPos, pageWidth - 40, 20, 'F')
-		doc.setFontSize(10)
-		doc.setFont(undefined, 'italic')
-		doc.text("This report is valid for 30 days from the date of assessment.", pageWidth / 2, yPos + 10, { align: 'center' })
-		doc.text("Please present this report when requesting blood/platelet donations.", pageWidth / 2, yPos + 16, { align: 'center' })
-
-		// Footer
-		doc.setFontSize(8)
-		doc.setFont(undefined, 'normal')
-		doc.text(`Generated on: ${new Date().toLocaleString()}`, pageWidth / 2, pageHeight - 10, { align: 'center' })
-
-		// Save the PDF
-		const fileName = `Health_Report_${displayDonor?.name?.replace(/\s+/g, '_') || 'Donor'}_${new Date().toISOString().split('T')[0]}.pdf`
-		doc.save(fileName)
-
-		// Show success message
-		alert("Health report downloaded successfully! You can now upload this report when requesting platelet donations.")
 	}
+
 
 	// Load health history from localStorage
 	useEffect(() => {
@@ -998,9 +1029,9 @@ export default function BloodDonation() {
 								<div className="rounded-2xl border border-yellow-500/30 bg-[#131326] p-6 shadow-lg shadow-yellow-500/5 flex items-center justify-between">
 									<div>
 										<p className="text-sm text-pink-100/80">Star Reward Progress</p>
-										<h2 className="mt-3 text-2xl font-bold text-white">{(displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0)} / 50 Stars</h2>
+										<h2 className="mt-3 text-2xl font-bold text-white">{(displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0)} / 3 Stars</h2>
 										<p className="mt-2 text-xs text-yellow-100/60 leading-relaxed">
-											Earn 50 stars to receive <span className="text-yellow-400 font-bold">50 Rs</span> & <span className="text-yellow-400 font-bold">20% Discount Coupon</span>!
+											Earn 3 stars to receive <span className="text-yellow-400 font-bold">50 Rs</span> & <span className="text-yellow-400 font-bold">20% Discount Coupon</span>!
 										</p>
 									</div>
 									<div className="relative h-20 w-20 flex-shrink-0">
@@ -1018,7 +1049,7 @@ export default function BloodDonation() {
 												className="text-yellow-500 transition-all duration-1000 ease-out"
 												strokeWidth="10"
 												strokeDasharray={251.2}
-												strokeDashoffset={251.2 - (251.2 * ((displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0))) / 50}
+												strokeDashoffset={251.2 - (251.2 * ((displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0))) / 3}
 												strokeLinecap="round"
 												stroke="currentColor"
 												fill="transparent"
@@ -1028,7 +1059,7 @@ export default function BloodDonation() {
 											/>
 										</svg>
 										<div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-yellow-500">
-											{Math.round((((displayDonor?.current_stars % 50) || (displayDonor?.current_stars > 0 ? 50 : 0)) / 50) * 100)}%
+											{Math.round((((displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0)) / 3) * 100)}%
 										</div>
 									</div>
 								</div>
@@ -1062,6 +1093,10 @@ export default function BloodDonation() {
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">Blood Group</p>
 													<p className="mt-2 text-base font-medium text-white">{displayDonor?.blood_group || "Not provided"}</p>
+												</div>
+												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
+													<p className="text-xs uppercase tracking-wide text-pink-100/60">Date of Birth</p>
+													<p className="mt-2 text-base font-medium text-white">{displayDonor?.date_of_birth || "Not provided"}</p>
 												</div>
 												<div className="rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-4">
 													<p className="text-xs uppercase tracking-wide text-pink-100/60">City</p>
@@ -1283,7 +1318,7 @@ export default function BloodDonation() {
 											</div>
 
 											{/* Health Status Section */}
-											<div className="mt-6 rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-6">
+											<div id="health-assessment-section" className="mt-6 rounded-xl border border-[#F6D6E3]/30 bg-[#1A1A2E] p-6">
 												<div className="flex items-center justify-between mb-4">
 													<div>
 														<h3 className="text-base font-semibold text-white flex items-center gap-2">
@@ -1531,18 +1566,30 @@ export default function BloodDonation() {
 														</p>
 
 														{healthReportUploaded ? (
-															<div className="flex items-center gap-3 rounded-lg bg-green-500/10 border border-green-500/30 p-3">
-																<div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-400">
-																	<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-																	</svg>
+															<div className="flex items-center justify-between gap-3 rounded-lg bg-green-500/10 border border-green-500/30 p-3">
+																<div className="flex items-center gap-3">
+																	<div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-400">
+																		<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																			<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+																		</svg>
+																	</div>
+																	<div className="flex-1">
+																		<p className="text-sm font-semibold text-green-300">Report Uploaded Successfully</p>
+																		<p className="text-xs text-green-200/60">
+																			{localStorage.getItem(HEALTH_REPORT_FILENAME_KEY_BLOOD) || "health-report.pdf"}
+																		</p>
+																	</div>
 																</div>
-																<div className="flex-1">
-																	<p className="text-sm font-semibold text-green-300">Report Uploaded Successfully</p>
-																	<p className="text-xs text-green-200/60">
-																		{localStorage.getItem(HEALTH_REPORT_FILENAME_KEY_BLOOD) || "health-report.pdf"}
-																	</p>
-																</div>
+																{verifiedPdfUrl && (
+																	<a
+																		href={verifiedPdfUrl}
+																		target="_blank"
+																		rel="noopener noreferrer"
+																		className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-600 transition shadow-sm uppercase"
+																	>
+																		View Verified Report
+																	</a>
+																)}
 															</div>
 														) : (
 															<div className="relative">
@@ -1626,6 +1673,58 @@ export default function BloodDonation() {
 																<span className="text-pink-100/70">Poor (0-59)</span>
 															</div>
 														</div>
+													</div>
+												)}
+											</div>
+
+											{/* Blockchain Integrity Ledger Section */}
+											<div className="mt-8">
+												<div className="flex items-center justify-between mb-4">
+													<div>
+														<h3 className="text-xl font-bold text-white flex items-center gap-2">
+															<svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+															</svg>
+															Verified Blood Report Ledger
+														</h3>
+														<p className="text-sm text-pink-100/60 mt-1">
+															Every health assessment report is hashed and recorded on our immutable integrity ledger.
+														</p>
+													</div>
+												</div>
+
+												{downloadHistory && downloadHistory.length > 0 ? (
+													<div className="space-y-3">
+														{downloadHistory.map((item) => (
+															<div key={item.id} className="rounded-xl border border-blue-500/20 bg-[#131326] p-4 font-mono text-xs transition hover:border-blue-400/40">
+																<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+																	<div className="space-y-1">
+																		<div className="flex items-center gap-2 text-blue-300">
+																			<span className="font-bold">DOWNLOAD ID:</span>
+																			<span>{item.download_id}</span>
+																		</div>
+																		<div className="flex items-center gap-2 text-pink-100/60 truncate max-w-xs sm:max-w-md">
+																			<span className="font-bold">PDF HASH:</span>
+																			<span>{item.pdf_hash}</span>
+																		</div>
+																		<div className="flex items-center gap-2 text-green-400/80 truncate max-w-xs sm:max-w-md">
+																			<span className="font-bold">BLOCK HASH:</span>
+																			<span>{item.block_hash}</span>
+																		</div>
+																	</div>
+																	<div className="flex flex-col items-start gap-1 sm:items-end sm:text-right">
+																		<span className="text-pink-100/40">{new Date(item.timestamp).toLocaleString()}</span>
+																		<span className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-400 border border-blue-500/20">
+																			NONCE: {item.nonce}
+																		</span>
+																	</div>
+																</div>
+															</div>
+														))}
+													</div>
+												) : (
+													<div className="rounded-xl border border-[#F6D6E3]/20 bg-[#131326] p-8 text-center">
+														<p className="text-pink-100/40">No download records found on the ledger.</p>
 													</div>
 												)}
 											</div>
@@ -1777,15 +1876,29 @@ export default function BloodDonation() {
 																				</button>
 																			)}
 																			{request.status === "REJECTED" && (
-																				<button
-																					onClick={() => {
-																						setSelectedRequest(request.id)
-																						setNewRequestOpen(true)
-																					}}
-																					className="rounded border border-[#E91E63] px-3 py-1 text-[9px] font-black text-[#E91E63] hover:bg-[#E91E63]/10 transition uppercase"
-																				>
-																					RESCHEDULE
-																				</button>
+																				<div className="flex items-center gap-2">
+																					<button
+																						onClick={() => {
+																							const element = document.getElementById("health-assessment-section")
+																							if (element) {
+																								element.scrollIntoView({ behavior: 'smooth' })
+																							}
+																							alert("Your previous request was rejected. Please complete a new health assessment to proceed with a fresh request.")
+																						}}
+																						className="rounded border border-[#E91E63] px-3 py-1 text-[9px] font-black text-[#E91E63] hover:bg-[#E91E63]/10 transition uppercase"
+																					>
+																						NEW ASSESSMENT
+																					</button>
+																					<button
+																						onClick={() => handleDeleteRequest(request.id)}
+																						className="p-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition group"
+																						title="Delete rejected request"
+																					>
+																						<svg className="w-3.5 h-3.5 group-hover:scale-110 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																							<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+																						</svg>
+																					</button>
+																				</div>
 																			)}
 																		</div>
 																	</div>
@@ -1824,45 +1937,69 @@ export default function BloodDonation() {
 											)}
 										</div>
 
-										{/* Critical Matches Column */}
+										{/* Critical Matches Section */}
 										<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
-											<div className="flex items-center justify-between mb-4">
-												<h2 className="text-lg font-semibold text-white">Critical Matches Near You</h2>
-												<Link href="/needs" legacyBehavior>
-													<a className="text-sm text-[#E91E63]">View All</a>
-												</Link>
+											<div className="flex flex-col gap-4 mb-6">
+												<div className="flex items-center justify-between">
+													<h2 className="text-lg font-semibold text-white">Blood Requests</h2>
+												</div>
+												<div className="flex gap-2 p-1 bg-white/5 rounded-xl">
+													<button
+														onClick={() => setActiveTab("matches")}
+														className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "matches"
+															? "bg-red-600 text-white shadow-lg shadow-red-600/20"
+															: "text-pink-100/40 hover:text-pink-100/60"
+															}`}
+													>
+														Matches ({matchedNeeds.length})
+													</button>
+													<button
+														onClick={() => setActiveTab("all")}
+														className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "all"
+															? "bg-[#1B3C73] text-white shadow-lg shadow-[#1B3C73]/20"
+															: "text-pink-100/40 hover:text-pink-100/60"
+															}`}
+													>
+														All ({emergencyNeeds.length})
+													</button>
+												</div>
 											</div>
-											{recommendedNeeds.length ? (
+											{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).length ? (
 												<ul className="space-y-3">
-													{recommendedNeeds.slice(0, 3).map((need) => {
+													{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).slice(0, 5).map((need) => {
 														const isUrgent = need.status === "URGENT"
 														return (
-															<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition">
+															<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition group">
 																<div className="flex items-start justify-between gap-3">
-																	<div className="flex-1">
+																	<div className="flex-1 min-w-0">
 																		<div className="flex items-center gap-2 mb-2">
-																			<span className="font-medium text-white text-sm">{need.title || need.need_type}</span>
-																			<span className={`rounded px-2 py-1 text-[10px] font-semibold ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
+																			<span className="font-bold text-white text-sm truncate">{need.title || need.need_type}</span>
+																			<span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-tighter ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
 																				{need.status || "NORMAL"}
 																			</span>
 																		</div>
-																		{need.hospital && (
-																			<p className="text-[10px] text-pink-100/70">
-																				Hospital: <span className="font-medium text-white">{need.hospital.name}</span>
+																		<div className="space-y-1">
+																			<p className="text-[10px] text-pink-100/60 flex items-center gap-1">
+																				📍 {need.city}
 																			</p>
-																		)}
+																			<p className="text-[10px] text-pink-100/70 border-t border-white/5 pt-1 mt-1 font-mono">
+																				{need.contact_phone}
+																			</p>
+																		</div>
 																	</div>
-																	<span className="rounded bg-[#E91E63]/10 px-2 py-1 text-[10px] font-bold text-[#E91E63]">
-																		{need.required_blood_group}
-																	</span>
+																	<Link href={`/needs/${need.id}`} legacyBehavior>
+																		<a className="rounded-lg h-10 w-10 flex items-center justify-center bg-[#E91E63]/10 text-[#E91E63] hover:bg-[#E91E63] hover:text-white transition-all shadow-sm">
+																			<span className="font-black text-xs">{need.required_blood_group || 'O+'}</span>
+																		</a>
+																	</Link>
 																</div>
 															</li>
 														)
 													})}
 												</ul>
 											) : (
-												<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70">
-													No matched requests at the moment.
+												<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70 text-center">
+													<p>No {activeTab === "matches" ? "compatible" : "active"} blood requests found at the moment.</p>
 												</div>
 											)}
 										</div>
@@ -1926,7 +2063,7 @@ export default function BloodDonation() {
 												<p className="mt-1 text-3xl font-black text-white">Rs {displayDonor?.total_money_earned || "0.00"}</p>
 											</div>
 											<p className="text-xs text-pink-100/50 leading-relaxed italic">
-												* Earned by reaching 50-star milestones. This amount is automatically credited to your LifeSaver wallet.
+												* Earned by reaching 3-star milestones. This amount is automatically credited to your LifeSaver wallet.
 											</p>
 										</div>
 									</div>
@@ -1937,37 +2074,63 @@ export default function BloodDonation() {
 											<div className="h-10 w-10 rounded-full bg-blue-500/20 flex items-center justify-center text-xl">🎟️</div>
 											<h2 className="text-lg font-bold text-white">Medical Coupons</h2>
 										</div>
-										{coupons.length > 0 ? (
-											<div className="space-y-3">
-												{coupons.map((coupon) => (
-													<div key={coupon.id} className="relative p-4 rounded-xl border-2 border-dashed border-blue-500/30 bg-blue-500/5 overflow-hidden">
-														<div className="relative z-10">
-															<div className="flex justify-between items-start mb-2">
-																<span className="text-xl font-black text-white">{coupon.discount_percentage}% OFF</span>
-																<span className="text-[10px] font-bold text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">VALID</span>
+										{coupons.filter(c => !c.is_used).length > 0 ? (
+											<div className="max-h-[300px] overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin', scrollbarColor: '#3b82f6 transparent' }}>
+												<div className="space-y-3">
+													{coupons.filter(c => !c.is_used).map((coupon) => {
+														const isSelected = selectedCoupon?.id === coupon.id
+														return (
+															<div key={coupon.id} className={`relative p-4 rounded-xl border-2 border-dashed overflow-hidden transition-all ${isSelected
+																? 'border-green-500/60 bg-green-500/10 ring-2 ring-green-500/30'
+																: 'border-blue-500/30 bg-blue-500/5'
+																}`}>
+																<div className="relative z-10">
+																	<div className="flex justify-between items-start mb-2">
+																		<span className="text-xl font-black text-white">{coupon.discount_percentage}% OFF</span>
+																		<div className="flex items-center gap-2">
+																			{isSelected ? (
+																				<span className="text-[10px] font-bold text-green-300 bg-green-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+																					<svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+																					SELECTED
+																				</span>
+																			) : (
+																				<span className="text-[10px] font-bold text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">VALID</span>
+																			)}
+																		</div>
+																	</div>
+																	<p className="text-xs text-pink-100/70 mb-3">Redeemable at partner medical stores.</p>
+																	<div className="flex items-center justify-between gap-2 p-2 rounded bg-black/40 border border-white/10 mb-3">
+																		<span className="text-sm font-mono font-bold text-blue-300 tracking-wider uppercase">{coupon.code}</span>
+																		<button
+																			onClick={() => {
+																				navigator.clipboard.writeText(coupon.code)
+																				alert("Coupon code copied!")
+																			}}
+																			className="text-[10px] font-black text-white hover:text-blue-300 transition uppercase"
+																		>
+																			Copy
+																		</button>
+																	</div>
+																	<button
+																		onClick={() => handleSelectCoupon(coupon)}
+																		className={`w-full py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition ${isSelected
+																			? 'bg-red-500/20 text-red-300 border border-red-500/40 hover:bg-red-500/30'
+																			: 'bg-green-500/20 text-green-300 border border-green-500/40 hover:bg-green-500/30'
+																			}`}
+																	>
+																		{isSelected ? '✓ Selected - Click to Deselect' : 'Select for Medicine Purchase'}
+																	</button>
+																</div>
+																<div className="absolute top-1/2 -right-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
+																<div className="absolute top-1/2 -left-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
 															</div>
-															<p className="text-xs text-pink-100/70 mb-3">Redeemable at partner medical stores.</p>
-															<div className="flex items-center justify-between gap-2 p-2 rounded bg-black/40 border border-white/10">
-																<span className="text-sm font-mono font-bold text-blue-300 tracking-wider uppercase">{coupon.code}</span>
-																<button
-																	onClick={() => {
-																		navigator.clipboard.writeText(coupon.code)
-																		alert("Coupon code copied!")
-																	}}
-																	className="text-[10px] font-black text-white hover:text-blue-300 transition uppercase"
-																>
-																	Copy
-																</button>
-															</div>
-														</div>
-														<div className="absolute top-1/2 -right-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
-														<div className="absolute top-1/2 -left-3 h-6 w-6 rounded-full bg-[#131326] border-2 border-blue-500/30 -translate-y-1/2"></div>
-													</div>
-												))}
+														)
+													})}
+												</div>
 											</div>
 										) : (
 											<div className="text-center py-8 px-4 rounded-xl border border-dashed border-white/10 bg-white/5">
-												<p className="text-xs text-pink-100/50">No coupons yet. Complete 50 stars to generate your first 20% discount coupon!</p>
+												<p className="text-xs text-pink-100/50">No active coupons. Complete 3 stars to generate your first 20% discount coupon!</p>
 											</div>
 										)}
 									</div>
@@ -2211,7 +2374,7 @@ export default function BloodDonation() {
 						</>
 					)}
 				</section>
-			</main>
+			</main >
 
 			{showEligibilityPopup && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
@@ -2233,7 +2396,9 @@ export default function BloodDonation() {
 						</button>
 					</div>
 				</div>
-			)}
+			)
+			}
+
 		</>
 	)
 }

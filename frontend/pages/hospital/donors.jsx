@@ -20,6 +20,7 @@ export default function HospitalPatients() {
     const [rescheduleForm, setRescheduleForm] = useState({ date: "", time: "" }) // Added for Reschedule
     const [verifyData, setVerifyData] = useState({
         rewards: "",
+        prescription: "",
         fruity_given: true,
         star_reward: true,
         notes: "",
@@ -29,12 +30,20 @@ export default function HospitalPatients() {
     const [verifying, setVerifying] = useState(false)
     const [rejecting, setRejecting] = useState(false)
     const [searchQuery, setSearchQuery] = useState("") // Added Search State
-    const [bodyReceiveModal, setBodyReceiveModal] = useState({ show: false, pledgeId: null, amount: "" }) // Added Body Receive Modal State
+    const [bodyReceiveModal, setBodyReceiveModal] = useState({
+        show: false,
+        pledgeId: null,
+        amount: "",
+        pdf_hash: "",
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toTimeString().split(' ')[0].substring(0, 5),
+        reportUrl: ""
+    }) // Added Body Receive Modal State
+    const [showInvoice, setShowInvoice] = useState(null)
+    const [invoiceConfirmed, setInvoiceConfirmed] = useState(false)
 
     useEffect(() => {
-        if (id) {
-            loadData()
-        }
+        loadData()
     }, [id])
 
     async function loadData() {
@@ -94,7 +103,7 @@ export default function HospitalPatients() {
     async function loadOrganDonors() {
         try {
             const data = await apiFetch("/organ-donors/")
-            setOrganDonors(data.filter(p => ["COMMITTED", "BODY_RECEIVED", "COMPLETED", "CANCELLED"].includes(p.status)))
+            setOrganDonors(data.filter(p => ["PENDING", "ACCEPTED", "REPORT_VERIFIED", "COMMITTED", "BODY_RECEIVED", "COMPLETED", "CANCELLED", "REJECTED"].includes(p.status)))
         } catch (error) {
             console.error("Error loading organ donors:", error)
             setOrganDonors([])
@@ -153,17 +162,31 @@ export default function HospitalPatients() {
     async function handleVerify(requestId) {
         setVerifying(true)
         try {
-            const isAppointment = !!selectedRequest.appointment_date
+            const isAppointment = !!(selectedRequest.appointment_date || selectedRequest.doctor)
+            if (!confirm(isAppointment ? "Mark this appointment as completed and submit prescription?" : "The PDF should be brought as an hardcopy with you. Mark as verified?")) {
+                setVerifying(false)
+                return
+            }
+
             const endpoint = isAppointment
-                ? `/appointments/${requestId}/hospital_verify/`
+                ? `/appointments/${requestId}/submit_prescription/`
                 : `/donation-requests/${requestId}/hospital_verify/`
+
+            const payload = isAppointment ? {
+                prescription_data: {
+                    notes: verifyData.notes,
+                    medicines: [], // Can be expanded in UI later
+                    custom_medicines: []
+                },
+                next_consultation_date: verifyData.visit_date
+            } : {
+                ...verifyData,
+                visit_date: `${verifyData.visit_date}T${verifyData.visit_time}:00Z`
+            }
 
             await apiFetch(endpoint, {
                 method: "POST",
-                body: JSON.stringify({
-                    ...verifyData,
-                    visit_date: `${verifyData.visit_date}T${verifyData.visit_time}:00Z`
-                })
+                body: JSON.stringify(payload)
             })
             alert("Visit verified successfully! history and rewards updated.")
             setShowVerifyModal(false)
@@ -184,17 +207,30 @@ export default function HospitalPatients() {
         }
     }
 
-    async function handleConfirmArrival(requestId) {
+    async function handleConfirmArrival(requestObj) {
         if (!confirm("Confirm that the donor has physically arrived at the hospital?")) {
             return
         }
+        const requestId = requestObj.id
+        const isAppointment = !!(requestObj.appointment_date || requestObj.doctor)
+
+        if (isAppointment && !requestObj.is_paid) {
+            alert("This appointment has NOT been paid for yet. Please ensure the donor has completed the payment and the receipt is verified before marking as arrived.")
+            return
+        }
+
+        const endpoint = isAppointment
+            ? `/appointments/${requestId}/confirm_arrival/`
+            : `/donation-requests/${requestId}/confirm_arrival/`
+
         try {
-            await apiFetch(`/donation-requests/${requestId}/confirm_arrival/`, {
+            await apiFetch(endpoint, {
                 method: "POST"
             })
             alert("Donor arrival confirmed!")
             if (hospital) {
                 loadDonationRequests(hospital.id)
+                loadAppointments(hospital.id)
             }
         } catch (error) {
             console.error("Error confirming arrival:", error)
@@ -202,18 +238,25 @@ export default function HospitalPatients() {
         }
     }
 
-    async function handleRejectArrival(requestId) {
+    async function handleRejectArrival(requestObj) {
         if (!confirm("Are you sure you want to reject this arrival? The donor will be notified and moved back to 'Accepted' status.")) {
             return
         }
+        const requestId = requestObj.id
+        const isAppointment = !!(requestObj.appointment_date || requestObj.doctor)
+        const endpoint = isAppointment
+            ? `/appointments/${requestId}/reject_arrival/`
+            : `/donation-requests/${requestId}/reject_arrival/`
+
         setRejecting(requestId)
         try {
-            await apiFetch(`/donation-requests/${requestId}/reject_arrival/`, {
+            await apiFetch(endpoint, {
                 method: "POST"
             })
             alert("Arrival rejected successfully.")
             if (hospital) {
                 loadDonationRequests(hospital.id)
+                loadAppointments(hospital.id)
             }
         } catch (error) {
             console.error("Error rejecting arrival:", error)
@@ -247,6 +290,27 @@ export default function HospitalPatients() {
         }
     }
 
+    async function handleOrganPledgeVerify(pledgeId, decision) {
+        if (!decision) return;
+        const confirmMsg = decision === 'verify'
+            ? "Confirm that you have reviewed and verified this organ pledge report?"
+            : "Are you sure you want to reject this organ pledge report?";
+
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            await apiFetch(`/organ-donors/${pledgeId}/hospital_verify/`, {
+                method: "POST",
+                body: JSON.stringify({ decision })
+            });
+            alert(decision === 'verify' ? "Pledge report verified successfully!" : "Pledge report rejected.");
+            await loadOrganDonors();
+        } catch (error) {
+            console.error("Error verifying organ pledge:", error)
+            alert("Failed to update status: " + error.message);
+        }
+    }
+
     async function handleDeleteVisit(visitId) {
         if (!confirm("Are you sure you want to delete this visit record? This action cannot be undone.")) {
             return
@@ -269,15 +333,24 @@ export default function HospitalPatients() {
         if (!bodyReceiveModal.pledgeId) return;
 
         try {
-            await apiFetch(`/organ-donors/${bodyReceiveModal.pledgeId}/receive_body/`, {
+            const receivedAt = `${bodyReceiveModal.date}T${bodyReceiveModal.time}:00Z`;
+            await apiFetch(`/organ-donors/${bodyReceiveModal.pledgeId}/intake_body/`, {
                 method: "POST",
-                body: JSON.stringify({ payment_amount: bodyReceiveModal.amount })
+                body: JSON.stringify({
+                    payment_amount: bodyReceiveModal.amount,
+                    pdf_hash: bodyReceiveModal.pdf_hash,
+                    received_at: receivedAt
+                })
             });
             await loadOrganDonors();
-            alert("Body reception and payment recorded successfully.");
-            setBodyReceiveModal({ show: false, pledgeId: null, amount: "" });
+            alert("Blockchain verified! Body reception and payment recorded successfully.");
+            setBodyReceiveModal({ show: false, pledgeId: null, amount: "", pdf_hash: "", date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().split(' ')[0].substring(0, 5), reportUrl: "" });
         } catch (error) {
-            alert("Error recording body reception: " + error.message);
+            if (error.expected_on_record) {
+                alert(`Verification Failed:\nThe provided hash does not match the blockchain record for this report.\n\nExpected: ${error.expected_on_record.substring(0, 16)}...\nProvided: ${error.provided.substring(0, 16)}...\n\nPlease verify you are using the hash from the correct report.`);
+            } else {
+                alert("Error recording body reception: " + error.message);
+            }
         }
     }
 
@@ -306,16 +379,18 @@ export default function HospitalPatients() {
     }
 
     // Filter logic with Search
-    const filteredRequests = activeTab === "COMPLETED" ? [] : [
-        ...donationRequests.filter(r => (r.request_type || "BLOOD") === activeTab && r.status !== "PENDING"),
-        ...(activeTab === "APPOINTMENTS" ? appointments.filter(a => ["PENDING", "APPROVED", "SCHEDULED", "RESCHEDULED"].includes(a.status)) : [])
-    ].filter(item => {
-        if (!searchQuery) return true;
-        const searchLower = searchQuery.toLowerCase();
-        const donor = item.donor || item.patient || item.user || {};
-        const name = `${donor.first_name || ""} ${donor.last_name || ""} ${donor.username || ""}`.toLowerCase();
-        return name.includes(searchLower) || (item.blood_group && item.blood_group.toLowerCase().includes(searchLower));
-    }).sort((a, b) => new Date(a.created_at || a.appointment_date) - new Date(b.created_at || b.appointment_date)) // ASCENDING ORDER as requested
+    const filteredRequests = activeTab === "COMPLETED" ?
+        appointments.filter(a => a.status === "COMPLETED") : [
+            ...donationRequests.filter(r => (r.request_type || "BLOOD") === activeTab && r.status !== "PENDING"),
+            ...(activeTab === "APPOINTMENTS" ? appointments.filter(a => ["PENDING", "APPROVED", "SCHEDULED", "RESCHEDULED", "ARRIVED"].includes(a.status)) : [])
+        ]
+            .filter(item => {
+                if (!searchQuery) return true;
+                const searchLower = searchQuery.toLowerCase();
+                const donor = item.donor || item.patient || item.user || {};
+                const name = `${donor.first_name || ""} ${donor.last_name || ""} ${donor.username || ""}`.toLowerCase();
+                return name.includes(searchLower) || (item.blood_group && item.blood_group.toLowerCase().includes(searchLower));
+            }).sort((a, b) => new Date(a.created_at || a.appointment_date) - new Date(b.created_at || b.appointment_date)) // ASCENDING ORDER as requested
 
     const filteredOrganDonors = organDonors.filter(d => {
         if (!searchQuery) return true;
@@ -415,12 +490,22 @@ export default function HospitalPatients() {
                                                             </td>
                                                             <td className="px-6 py-4">
                                                                 <div className="flex flex-col">
-                                                                    <span className="rounded bg-[#E91E63]/10 px-2 py-1 text-xs font-medium text-[#E91E63] w-fit">
+                                                                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider shadow-sm ${visit.visit_purpose === "BLOOD_DONATION" ? "bg-red-500/20 text-red-500 border border-red-500/30" :
+                                                                        visit.visit_purpose === "PLATELET_DONATION" ? "bg-amber-500/20 text-amber-500 border border-amber-500/30" :
+                                                                            visit.visit_purpose === "ORGAN_DONATION" ? "bg-purple-500/20 text-purple-500 border border-purple-500/30" :
+                                                                                visit.visit_purpose === "CONSULTATION" ? "bg-blue-500/20 text-blue-500 border border-blue-500/30" :
+                                                                                    "bg-pink-500/20 text-pink-500 border border-pink-500/30"
+                                                                        }`}>
+                                                                        {visit.visit_purpose === "BLOOD_DONATION" && "🩸"}
+                                                                        {visit.visit_purpose === "PLATELET_DONATION" && "🧬"}
+                                                                        {visit.visit_purpose === "ORGAN_DONATION" && "🫀"}
+                                                                        {visit.visit_purpose === "CONSULTATION" && "🩺"}
                                                                         {visit.visit_purpose?.replace("_", " ")}
                                                                     </span>
                                                                     {visit.doctor?.name && (
-                                                                        <span className="text-[10px] text-pink-100/60 mt-1">
-                                                                            👨‍⚕️ {visit.doctor.name}
+                                                                        <span className="text-[10px] text-pink-100/60 mt-1.5 flex items-center gap-1">
+                                                                            <span className="h-1 w-1 rounded-full bg-blue-400"></span>
+                                                                            Dr. {visit.doctor.name}
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -481,7 +566,7 @@ export default function HospitalPatients() {
                                                 <tr>
                                                     <th className="px-6 py-4">Donor Name</th>
                                                     <th className="px-6 py-4">Organs Provided</th>
-                                                    <th className="px-6 py-4">Blood Group</th>
+                                                    <th className="px-6 py-4">Report</th>
                                                     <th className="px-6 py-4">Payment Details</th>
                                                     <th className="px-6 py-4">Status</th>
                                                     <th className="px-6 py-4">Actions</th>
@@ -499,14 +584,23 @@ export default function HospitalPatients() {
                                                         <td className="px-6 py-4">
                                                             <span className="text-blue-300 font-medium">{donor.organs}</span>
                                                         </td>
-                                                        <td className="px-6 py-4 text-xs">
-                                                            {donor.blood_group}
+                                                        <td className="px-6 py-4">
+                                                            {donor.pledge_report ? (
+                                                                <a
+                                                                    href={donor.pledge_report}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="text-xs font-bold text-blue-400 underline decoration-blue-500/30"
+                                                                >
+                                                                    View
+                                                                </a>
+                                                            ) : "N/A"}
                                                         </td>
                                                         <td className="px-6 py-4">
                                                             <div className="flex flex-col">
                                                                 <span className="text-green-400 font-bold">₹{donor.payment_amount || "0"}</span>
                                                                 <span className="text-[10px] text-pink-100/50">
-                                                                    {donor.body_received_at ? new Date(donor.body_received_at).toLocaleDateString() : ""}
+                                                                    {donor.body_received_at ? new Date(donor.body_received_at).toLocaleString() : ""}
                                                                 </span>
                                                             </div>
                                                         </td>
@@ -544,9 +638,13 @@ export default function HospitalPatients() {
                                     {filteredOrganDonors.length > 0 ? (
                                         filteredOrganDonors.map((donor) => {
                                             const statusColors = {
+                                                PENDING: "bg-yellow-600/20 text-yellow-400 border-yellow-500/20",
+                                                ACCEPTED: "bg-blue-600/10 text-blue-300 border-blue-500/10",
+                                                REPORT_VERIFIED: "bg-purple-600/20 text-purple-400 border-purple-500/20",
                                                 COMMITTED: "bg-green-600/20 text-green-400 border-green-500/20",
                                                 BODY_RECEIVED: "bg-blue-600/20 text-blue-400 border-blue-500/20",
                                                 CANCELLED: "bg-red-600/20 text-red-400 border-red-500/20",
+                                                REJECTED: "bg-orange-600/20 text-orange-400 border-orange-500/20",
                                             }
                                             const statusColor = statusColors[donor.status] || "bg-gray-600/20 text-gray-400 border-gray-500/20"
 
@@ -570,6 +668,24 @@ export default function HospitalPatients() {
                                                             <span className="font-semibold opacity-70">Blood Group:</span> {donor.blood_group}
                                                         </div>
                                                         <div className="mt-3 p-2 rounded bg-white/5 border border-white/10">
+                                                            <p className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-1.5">Documentation</p>
+                                                            {donor.pledge_report ? (
+                                                                <a
+                                                                    href={donor.pledge_report}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="flex items-center gap-1.5 text-[10px] font-bold text-white hover:text-blue-300 transition uppercase underline decoration-blue-500/50"
+                                                                >
+                                                                    <svg className="w-3 h-3 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                                    </svg>
+                                                                    View Verified Pledge Report
+                                                                </a>
+                                                            ) : (
+                                                                <p className="text-[10px] text-pink-100/40 italic">No report uploaded</p>
+                                                            )}
+                                                        </div>
+                                                        <div className="mt-3 p-2 rounded bg-white/5 border border-white/10">
                                                             <p className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-1">Emergency Contact</p>
                                                             <p className="text-xs text-white">{donor.emergency_contact_name}</p>
                                                             <p className="text-[10px] text-pink-100/60">{donor.emergency_contact_phone} ({donor.emergency_contact_relation})</p>
@@ -577,9 +693,38 @@ export default function HospitalPatients() {
                                                     </div>
 
                                                     <div className="mt-5 flex flex-col gap-2">
+                                                        {donor.status === "PENDING" && (
+                                                            <div className="flex gap-2">
+                                                                <button
+                                                                    onClick={() => handleOrganPledgeVerify(donor.id, 'verify')}
+                                                                    className="flex-1 rounded-lg bg-purple-600 py-2 text-xs font-bold text-white hover:bg-purple-500 transition shadow-sm uppercase"
+                                                                >
+                                                                    Verify Report
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleOrganPledgeVerify(donor.id, 'reject')}
+                                                                    className="flex-1 rounded-lg bg-red-600/20 border border-red-500/30 py-2 text-xs font-bold text-red-400 hover:bg-red-500 hover:text-white transition shadow-sm uppercase"
+                                                                >
+                                                                    Reject
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                        {donor.status === "REPORT_VERIFIED" && (
+                                                            <p className="text-[10px] text-purple-300 font-bold text-center border border-purple-500/30 rounded py-1 bg-purple-500/10">
+                                                                ✓ REPORT VERIFIED - Awaiting Donor Finalization
+                                                            </p>
+                                                        )}
                                                         {donor.status === "COMMITTED" && (
                                                             <button
-                                                                onClick={() => setBodyReceiveModal({ show: true, pledgeId: donor.id, amount: "" })}
+                                                                onClick={() => setBodyReceiveModal({
+                                                                    show: true,
+                                                                    pledgeId: donor.id,
+                                                                    amount: "",
+                                                                    pdf_hash: "",
+                                                                    date: new Date().toISOString().split('T')[0],
+                                                                    time: new Date().toTimeString().split(' ')[0].substring(0, 5),
+                                                                    reportUrl: donor.pledge_report
+                                                                })}
                                                                 className="w-full rounded-lg bg-blue-600 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-lg uppercase tracking-wider"
                                                             >
                                                                 Body Received & Pay
@@ -647,6 +792,45 @@ export default function HospitalPatients() {
                                                                 <span className="font-semibold">Scheduled:</span> {new Date(request.scheduled_date).toLocaleString()}
                                                             </div>
                                                         )}
+                                                        {request.appointment_date && (
+                                                            <div className="space-y-2">
+                                                                <div className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10">
+                                                                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-blue-400 mb-1.5">
+                                                                        <span>Consulting Doctor</span>
+                                                                    </div>
+                                                                    <p className="text-sm font-bold text-white">Dr. {request.doctor?.name || "N/A"}</p>
+                                                                    {request.doctor?.specialization && <p className="text-[10px] text-pink-100/50">{request.doctor.specialization}</p>}
+                                                                </div>
+                                                                <div className={`mt-2 p-2 rounded-lg border ${request.is_paid ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                                                                    <p className="text-[10px] font-black uppercase tracking-widest flex items-center justify-between">
+                                                                        <span>{request.is_paid ? '✅ Payment Verified' : '❌ UNPAID'}</span>
+                                                                        {request.is_paid && <span className="opacity-70">{request.payment_receipt}</span>}
+                                                                    </p>
+                                                                </div>
+                                                                {request.is_paid && (
+                                                                    <div className="flex flex-col gap-1.5 mt-2">
+                                                                        <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest px-1">Prescription Ready</p>
+                                                                        <button
+                                                                            onClick={() => { setShowInvoice(request); setInvoiceConfirmed(false); }}
+                                                                            className="w-full flex items-center justify-between rounded-lg bg-indigo-600/20 border border-indigo-500/30 px-3 py-2 text-[10px] font-bold text-indigo-300 hover:bg-indigo-600/30 transition"
+                                                                        >
+                                                                            <span>VIEW INVOICE & RX</span>
+                                                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                                                                        </button>
+                                                                    </div>
+                                                                )}
+                                                                {request.appointment_time && (
+                                                                    <div className="flex items-center gap-2 text-xs text-blue-300">
+                                                                        <span className="font-semibold text-blue-100/70">Slot:</span> {request.appointment_time}
+                                                                    </div>
+                                                                )}
+                                                                {request.is_reaching && (
+                                                                    <div className="mt-2 p-2 rounded-lg bg-blue-600/20 border border-blue-500/40 text-center animate-pulse">
+                                                                        <p className="text-blue-400 text-[10px] font-black uppercase tracking-widest">🚀 On the Way</p>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                         {request.health_report && (
                                                             <div className="mt-2">
                                                                 <a
@@ -668,10 +852,10 @@ export default function HospitalPatients() {
                                                         {(request.status === "PENDING" && !request.appointment_date) && (
                                                             <div className="flex gap-2">
                                                                 <button
-                                                                    onClick={() => handleAcceptRequest(request.id)}
-                                                                    className="flex-1 rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-500 transition shadow-sm uppercase"
+                                                                    onClick={() => handleConfirmArrival(request)}
+                                                                    className="flex-1 rounded-lg bg-blue-600 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-sm uppercase"
                                                                 >
-                                                                    Arrived
+                                                                    Mark Arrived
                                                                 </button>
                                                                 <button
                                                                     onClick={() => handleRejectRequest(request.id)}
@@ -681,26 +865,40 @@ export default function HospitalPatients() {
                                                                 </button>
                                                             </div>
                                                         )}
-                                                        {(request.status === "ARRIVED" || request.status === "SCHEDULED" || request.status === "ACCEPTED" || request.status === "APPROVED") && (
+                                                        {request.status === "ARRIVED" && (
+                                                            <div className="flex gap-2">
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setSelectedRequest(request)
+                                                                        setShowVerifyModal(true)
+                                                                    }}
+                                                                    className="flex-1 rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-500 transition shadow-sm uppercase"
+                                                                >
+                                                                    Verify Visit
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleRejectArrival(request)}
+                                                                    disabled={rejecting === request.id}
+                                                                    className="flex-1 rounded-lg bg-red-600/10 border border-red-500/30 py-2 text-xs font-bold text-red-400 hover:bg-red-500 hover:text-white transition shadow-sm uppercase"
+                                                                >
+                                                                    {rejecting === request.id ? "..." : "Revert"}
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                        {(request.status === "ACCEPTED" || request.status === "APPROVED" || request.status === "SCHEDULED") && (
                                                             <div className="flex flex-col gap-2 pt-2 border-t border-white/10 mt-2">
-                                                                {request.status === "ACCEPTED" || request.status === "APPROVED" || request.status === "SCHEDULED" ? (
+                                                                {request.appointment_date && !request.is_reaching ? (
+                                                                    <div className="w-full rounded-lg bg-white/5 border border-white/10 py-2 text-center">
+                                                                        <p className="text-[10px] text-pink-100/40 font-bold uppercase tracking-wider italic">Waiting for Donor Signal</p>
+                                                                    </div>
+                                                                ) : (
                                                                     <button
-                                                                        onClick={() => handleConfirmArrival(request.id)}
+                                                                        onClick={() => handleConfirmArrival(request)}
                                                                         className="w-full rounded-lg bg-blue-600 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-lg uppercase tracking-wider"
                                                                     >
                                                                         Mark as Arrived
                                                                     </button>
-                                                                ) : request.status === "ARRIVED" ? (
-                                                                    <button
-                                                                        onClick={() => {
-                                                                            setSelectedRequest(request)
-                                                                            setShowVerifyModal(true)
-                                                                        }}
-                                                                        className="w-full rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-500 transition shadow-lg uppercase tracking-wider"
-                                                                    >
-                                                                        He has reached the hospital
-                                                                    </button>
-                                                                ) : null}
+                                                                )}
                                                                 <button
                                                                     onClick={() => handleNotReached(request.id, !!request.appointment_date)}
                                                                     className="w-full rounded-lg bg-red-600/10 border border-red-500/40 py-2 text-xs font-bold text-red-400 hover:bg-red-600 hover:text-white transition uppercase"
@@ -731,6 +929,87 @@ export default function HospitalPatients() {
                         </div>
                     )}
                 </div>
+
+                {/* Hospital Invoice Modal */}
+                {showInvoice && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0A0A1A]/90 backdrop-blur-md">
+                        <div className="w-full max-w-lg rounded-3xl overflow-hidden border border-white/10 bg-[#131326] shadow-2xl animate-in zoom-in-95 duration-200">
+                            <div className="bg-gradient-to-r from-indigo-600 to-blue-600 p-8 text-center relative">
+                                <button
+                                    onClick={() => setShowInvoice(null)}
+                                    className="absolute top-4 right-4 text-white/70 hover:text-white"
+                                >
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                                <div className="mx-auto w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mb-4">
+                                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-2xl font-black text-white uppercase tracking-tighter">Hospital Bill Copy</h2>
+                                <p className="text-blue-100/80 font-mono text-sm mt-1">{showInvoice.payment_receipt || "INTERNAL_COPY"}</p>
+                            </div>
+
+                            <div className="p-8 space-y-6">
+                                <div className="flex justify-between items-start border-b border-white/5 pb-6">
+                                    <div>
+                                        <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-1">Patient Name</p>
+                                        <p className="text-white font-bold text-lg leading-tight">{showInvoice.donor?.first_name} {showInvoice.donor?.last_name || "Guest Patient"}</p>
+                                        <p className="text-pink-100/50 text-xs mt-1">ID: {showInvoice.donor?.id || "N/A"}</p>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-1">Appointment Date</p>
+                                        <p className="text-white font-bold">{new Date(showInvoice.appointment_date).toLocaleDateString()}</p>
+                                        {showInvoice.appointment_time && <p className="text-pink-100/50 text-xs">{showInvoice.appointment_time}</p>}
+                                    </div>
+                                </div>
+
+                                <div className="bg-[#1A1A2E] rounded-2xl p-6 border border-white/5 space-y-4">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-pink-100/60 text-sm">Consultation Charges</span>
+                                        <span className="text-white font-mono font-bold">{showInvoice.currency} {showInvoice.charges || showInvoice.doctor?.consultation_charge}</span>
+                                    </div>
+
+                                    {showInvoice.prescription_data && (
+                                        <div className="pt-4 border-t border-white/5 space-y-2">
+                                            <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Prescription Items (RX)</p>
+                                            {[...(showInvoice.prescription_data.medicines || []), ...(showInvoice.prescription_data.custom_medicines || [])].map((med, idx) => (
+                                                <div key={`rx-${idx}`} className="flex justify-between items-center text-xs">
+                                                    <span className="text-white font-medium">{med.name}</span>
+                                                    <span className="text-pink-100/50">{med.dosage} ({med.timing?.replace('_', ' ')})</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="flex justify-between items-center pt-4 border-t border-white/5">
+                                        <span className="text-white font-bold uppercase text-xs tracking-widest">Total Collected</span>
+                                        <span className="text-green-400 text-xl font-black">
+                                            {showInvoice.currency} {parseFloat(showInvoice.charges || showInvoice.doctor?.consultation_charge || 0).toFixed(2)}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-4">
+                                    <button
+                                        onClick={() => setShowInvoice(null)}
+                                        className="flex-1 rounded-xl bg-white/10 hover:bg-white/20 py-3 font-bold text-white transition border border-white/10"
+                                    >
+                                        Dismiss
+                                    </button>
+                                    <button
+                                        onClick={() => window.print()}
+                                        className="flex-1 rounded-xl bg-indigo-600 py-3 font-bold text-white shadow-lg transition hover:bg-indigo-500"
+                                    >
+                                        Print Copy
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Verification Modal */}
                 {showVerifyModal && (
@@ -797,13 +1076,23 @@ export default function HospitalPatients() {
                                 </div>
 
                                 <div>
-                                    <label className="block text-[10px] font-black text-blue-300 uppercase tracking-widest mb-1.5">Hospital Notes</label>
+                                    <label className="block text-[10px] font-black text-blue-300 uppercase tracking-widest mb-1.5">Medicines / Prescription</label>
+                                    <textarea
+                                        rows={4}
+                                        value={verifyData.prescription || ""}
+                                        onChange={(e) => setVerifyData({ ...verifyData, prescription: e.target.value })}
+                                        placeholder="Enter medicine instructions for the patient..."
+                                        className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none transition font-mono"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] font-black text-red-400 uppercase tracking-widest mb-1.5">Notes (Internal)</label>
                                     <textarea
                                         rows={3}
                                         value={verifyData.notes}
                                         onChange={(e) => setVerifyData({ ...verifyData, notes: e.target.value })}
                                         className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none transition"
-                                        placeholder="Add any internal medical notes..."
                                     />
                                 </div>
 
@@ -831,31 +1120,79 @@ export default function HospitalPatients() {
                 {bodyReceiveModal.show && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
                         <div className="w-full max-w-sm rounded-2xl border border-blue-500/30 bg-[#131326] p-6 shadow-2xl">
-                            <h3 className="text-lg font-bold text-white mb-4">Complete Donation</h3>
+                            <h3 className="text-lg font-bold text-white mb-4">Complete Donation Intake</h3>
                             <p className="text-sm text-pink-100/70 mb-4">
-                                Confirm body receipt and enter payment amount for the donor's family/contact.
+                                Verify the pledge report and record body reception.
                             </p>
-                            <label className="block text-xs font-bold text-blue-300 uppercase mb-2">Payment Amount (₹)</label>
-                            <input
-                                type="number"
-                                value={bodyReceiveModal.amount}
-                                onChange={(e) => setBodyReceiveModal({ ...bodyReceiveModal, amount: e.target.value })}
-                                className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none mb-6"
-                                placeholder="Enter amount..."
-                            />
-                            <div className="flex gap-3">
-                                <button
-                                    onClick={handleReceiveBody}
-                                    className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-bold text-white hover:bg-blue-500"
-                                >
-                                    Confirm & Pay
-                                </button>
-                                <button
-                                    onClick={() => setBodyReceiveModal({ show: false, pledgeId: null, amount: "" })}
-                                    className="flex-1 rounded-lg border border-[#F6D6E3]/20 py-2 text-sm text-white hover:bg-white/5"
-                                >
-                                    Cancel
-                                </button>
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-[10px] font-bold text-blue-300 uppercase mb-1.5">Blockchain Verification (PDF Hash)</label>
+                                    <input
+                                        type="text"
+                                        value={bodyReceiveModal.pdf_hash || ""}
+                                        onChange={(e) => setBodyReceiveModal({ ...bodyReceiveModal, pdf_hash: e.target.value })}
+                                        className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-4 py-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono"
+                                        placeholder="Paste SHA-256 Hash from Report..."
+                                    />
+                                    {bodyReceiveModal.reportUrl && (
+                                        <a
+                                            href={bodyReceiveModal.reportUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="mt-2 inline-block text-[10px] text-blue-400 hover:text-blue-300 font-bold uppercase underline"
+                                        >
+                                            Open Report to Find Hash
+                                        </a>
+                                    )}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-blue-300 uppercase mb-1.5">Intake Date</label>
+                                        <input
+                                            type="date"
+                                            value={bodyReceiveModal.date}
+                                            onChange={(e) => setBodyReceiveModal({ ...bodyReceiveModal, date: e.target.value })}
+                                            className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-blue-300 uppercase mb-1.5">Intake Time</label>
+                                        <input
+                                            type="time"
+                                            value={bodyReceiveModal.time}
+                                            onChange={(e) => setBodyReceiveModal({ ...bodyReceiveModal, time: e.target.value })}
+                                            className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] font-bold text-blue-300 uppercase mb-1.5">Payment Amount (₹)</label>
+                                    <input
+                                        type="number"
+                                        value={bodyReceiveModal.amount}
+                                        onChange={(e) => setBodyReceiveModal({ ...bodyReceiveModal, amount: e.target.value })}
+                                        className="w-full rounded-lg border border-[#F6D6E3]/20 bg-[#1A1A2E] px-4 py-3 text-sm text-white focus:border-blue-500 focus:outline-none"
+                                        placeholder="Enter amount..."
+                                    />
+                                </div>
+
+                                <div className="flex gap-3 pt-2">
+                                    <button
+                                        onClick={handleReceiveBody}
+                                        className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-bold text-white hover:bg-blue-500 transition shadow-lg"
+                                    >
+                                        Verify & Intake
+                                    </button>
+                                    <button
+                                        onClick={() => setBodyReceiveModal({ show: false, pledgeId: null, amount: "", pdf_hash: "" })}
+                                        className="flex-1 rounded-lg border border-[#F6D6E3]/20 py-2 text-sm text-white hover:bg-white/5"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

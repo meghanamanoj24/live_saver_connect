@@ -91,3 +91,17 @@ REST_FRAMEWORK = {
 
 # Dev CORS settings
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Email Configuration
+# Using console backend for development to avoid SMTP errors.
+# To use Gmail, comment out the console line and uncomment the SMTP section.
+# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Gmail SMTP Configuration (Placeholder)
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = "hospitalemergency1234@gmail.com"
+EMAIL_HOST_PASSWORD = "skkg hqjd aupg tfbi"
+

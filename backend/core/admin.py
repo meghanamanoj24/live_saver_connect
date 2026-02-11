@@ -4,8 +4,10 @@ from django.utils.translation import gettext_lazy as _
 
 from .models import (
 	User, DonorProfile, EmergencyNeed, OrganDonor, MarketplaceItem, Hospital, Doctor, Review,
-	DonationRequest, HospitalNeed, Appointment, MedicalEssential, MedicalStoreProduct,
-	MedicalEquipment, MedicalOrder, MedicalOrderItem, EquipmentNeed
+	DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, AccidentAlert, 
+	AmbulanceRequest, BloodDonationEvent, EventRegistration, MedicalEssential, 
+	MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, 
+	EquipmentNeed, PDFIntegrityLedger
 )
 
 @admin.register(User)
@@ -72,8 +74,8 @@ class UserAdmin(UserAdmin):
 
 @admin.register(DonorProfile)
 class DonorProfileAdmin(admin.ModelAdmin):
-	list_display = ("city", "is_platelet_donor", "is_available")
-	search_fields = ("city", "zip_code", "blood_group")
+	list_display = ("city", "is_platelet_donor", "is_available", "latest_report_id" )
+	search_fields = ("city", "zip_code", "blood_group", "latest_report_id")
 	list_filter = ("is_platelet_donor", "is_available")
 
 
@@ -82,6 +84,20 @@ class EmergencyNeedAdmin(admin.ModelAdmin):
 	list_display = ("title", "need_type", "city", "status", "created_at")
 	search_fields = ("title", "city", "zip_code", "required_blood_group")
 	list_filter = ("need_type", "status")
+
+
+@admin.register(AccidentAlert)
+class AccidentAlertAdmin(admin.ModelAdmin):
+	list_display = ("title", "city", "severity", "status", "created_at")
+	search_fields = ("title", "city", "location")
+	list_filter = ("severity", "status")
+
+
+@admin.register(AmbulanceRequest)
+class AmbulanceRequestAdmin(admin.ModelAdmin):
+	list_display = ("hospital", "patient_name", "status", "created_at")
+	search_fields = ("patient_name", "hospital__name", "location")
+	list_filter = ("status", "hospital")
 
 
 @admin.register(EquipmentNeed)
@@ -187,4 +203,11 @@ class MedicalOrderItemAdmin(admin.ModelAdmin):
 	list_filter = ("product_type",)
 	readonly_fields = ("subtotal", "created_at", "updated_at")
 
+
+@admin.register(PDFIntegrityLedger)
+class PDFIntegrityLedgerAdmin(admin.ModelAdmin):
+	list_display = ("user", "download_id", "pdf_hash", "pdf_file", "created_at")
+	search_fields = ("user__email", "download_id")
+	list_filter = ("created_at",)
+	readonly_fields = ("user", "download_id", "pdf_hash", "pdf_file", "previous_block_hash", "block_hash", "nonce", "created_at")
 

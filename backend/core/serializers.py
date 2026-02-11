@@ -33,6 +33,7 @@ from .models import (
 	EquipmentOrder,
 	Invoice,
 	EventRegistration,
+	AmbulanceRequest,
 )
 
 User = get_user_model()
@@ -65,9 +66,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 	
 class UserPublicSerializer(serializers.ModelSerializer):
+	date_of_birth = serializers.SerializerMethodField()
+	
 	class Meta:
 		model = User
-		fields = ["id", "first_name", "last_name", "email", "phone", "blood_group"]
+		fields = ["id", "first_name", "last_name", "email", "phone", "blood_group", "date_of_birth"]
+
+	def get_date_of_birth(self, obj):
+		try:
+			if hasattr(obj, 'donor_profile') and obj.donor_profile.date_of_birth:
+				return obj.donor_profile.date_of_birth
+		except Exception:
+			pass
+		return None
 
 
 class DonorProfileSerializer(serializers.ModelSerializer):
@@ -97,6 +108,7 @@ class DonorProfileSerializer(serializers.ModelSerializer):
             "is_platelet_donor",
             "last_donated_on",
             "is_available",
+            "date_of_birth",
             "current_stars",
             "total_money_earned",
         ]
@@ -134,11 +146,17 @@ class EmergencyNeedSerializer(serializers.ModelSerializer):
 			"description",
 			"need_type",
 			"required_blood_group",
+			"organ_type",
+			"referral_phone",
+			"reward_amount",
 			"city",
 			"zip_code",
 			"contact_phone",
 			"status",
 			"needed_by",
+			"latitude",
+			"longitude",
+			"accepted_by",
 			"poster_image",
 			"created_by",
 			"created_by_id",
@@ -173,7 +191,7 @@ class HospitalSerializer(serializers.ModelSerializer):
 		read_only_fields = ["created_at", "updated_at"]
 
 class OrganDonorSerializer(serializers.ModelSerializer):
-	user = UserPublicSerializer(read_only=True)
+	user = UserPublicSerializer(source="created_by", read_only=True)
 	user_id = serializers.PrimaryKeyRelatedField(source="created_by", write_only=True, queryset=User.objects.all(), required=True)
 	selected_hospitals = HospitalSerializer(many=True, read_only=True)
 	selected_hospital_ids = serializers.PrimaryKeyRelatedField(
@@ -184,6 +202,11 @@ class OrganDonorSerializer(serializers.ModelSerializer):
 		required=False
 	)
 	accepted_by_hospital_name = serializers.ReadOnlyField(source="accepted_by_hospital.name")
+	
+	# Source from primary registration data
+	registration_dob = serializers.ReadOnlyField(source="created_by.donor_profile.date_of_birth")
+	registration_blood_group = serializers.ReadOnlyField(source="created_by.blood_group")
+	registration_phone = serializers.ReadOnlyField(source="created_by.phone")
 
 	class Meta:
 		model = OrganDonor
@@ -213,6 +236,10 @@ class OrganDonorSerializer(serializers.ModelSerializer):
 			"hospital_message",
 			"accepted_by_hospital",
 			"accepted_by_hospital_name",
+			"pledge_report",
+			"registration_dob",
+			"registration_blood_group",
+			"registration_phone",
 			"body_received_at",
 			"payment_amount",
 			"payment_date",
@@ -245,6 +272,7 @@ class DoctorSerializer(serializers.ModelSerializer):
 			"nmc_number",
 			"consultation_charge",
 			"currency",
+			"time_schedule",
 			"is_available",
 			"availability_schedules",
 			"created_at",
@@ -383,6 +411,8 @@ class AppointmentSerializer(serializers.ModelSerializer):
 	donation_request = DonationRequestSerializer(read_only=True)
 	donation_request_id = serializers.PrimaryKeyRelatedField(source="donation_request", write_only=True, queryset=DonationRequest.objects.all(), allow_null=True, required=False)
 
+	medicine_orders = serializers.SerializerMethodField()
+	
 	class Meta:
 		model = Appointment
 		fields = [
@@ -401,10 +431,25 @@ class AppointmentSerializer(serializers.ModelSerializer):
 			"notes",
 			"charges",
 			"currency",
+			"is_paid",
+			"payment_date",
+			"payment_method",
+			"payment_receipt",
+			"is_reaching",
+			"reaching_at",
+			"prescription",
+			"prescription_data",
+			"is_prescription_ready",
+			"medicine_orders",
+			"next_consultation_date",
+			"confirmed_arrival_at",
 			"created_at",
 			"updated_at",
 		]
 		read_only_fields = ["created_at", "updated_at"]
+
+	def get_medicine_orders(self, obj):
+		return MedicalOrderSerializer(obj.medicine_orders.all(), many=True, read_only=True).data
 
 
 class DeceasedDonorRequestSerializer(serializers.ModelSerializer):
@@ -688,19 +733,29 @@ class MedicalOrderItemSerializer(serializers.ModelSerializer):
 
 
 class MedicalOrderSerializer(serializers.ModelSerializer):
-	customer = UserPublicSerializer(read_only=True)
-	customer_id = serializers.PrimaryKeyRelatedField(source="customer", write_only=True, queryset=User.objects.all(), required=True)
+	user = UserPublicSerializer(read_only=True)
+	user_id = serializers.PrimaryKeyRelatedField(source="user", write_only=True, queryset=User.objects.all(), required=True)
 	supplier = MedicalEssentialSerializer(read_only=True)
 	supplier_id = serializers.PrimaryKeyRelatedField(source="supplier", write_only=True, queryset=MedicalEssential.objects.all(), required=True)
 	items = MedicalOrderItemSerializer(many=True, read_only=True)
 	order_number = serializers.CharField(read_only=True)
+	invoice = serializers.SerializerMethodField()
+	# Removed AppointmentSerializer to break circular dependency
+	# appointment = AppointmentSerializer(read_only=True)
+	appointment_id = serializers.PrimaryKeyRelatedField(
+		source="appointment", 
+		write_only=True, 
+		queryset=Appointment.objects.all(), 
+		required=False, 
+		allow_null=True
+	)
 
 	class Meta:
 		model = MedicalOrder
 		fields = [
 			"id",
-			"customer",
-			"customer_id",
+			"user",
+			"user_id",
 			"supplier",
 			"supplier_id",
 			"order_type",
@@ -714,11 +769,22 @@ class MedicalOrderSerializer(serializers.ModelSerializer):
 			"contact_phone",
 			"notes",
 			"estimated_delivery",
+			"actual_shipping_at",
+			"estimated_arrival_at",
+			"rating",
+			# "appointment",  # Removed to break circular dependency
+			"appointment_id",
 			"items",
+			"invoice",
 			"created_at",
 			"updated_at",
 		]
-		read_only_fields = ["order_number", "created_at", "updated_at"]
+		read_only_fields = ["order_number", "created_at", "updated_at", "invoice"]
+
+	def get_invoice(self, obj):
+		if hasattr(obj, 'invoice'):
+			return InvoiceSerializer(obj.invoice).data
+		return None
 
 
 class DoctorAvailabilitySerializer(serializers.ModelSerializer):
@@ -970,8 +1036,8 @@ class EquipmentOrderSerializer(serializers.ModelSerializer):
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-	equipment_order = EquipmentOrderSerializer(read_only=True)
-	equipment_order_id = serializers.PrimaryKeyRelatedField(source="equipment_order", write_only=True, queryset=EquipmentOrder.objects.all(), required=True)
+	equipment_order = serializers.PrimaryKeyRelatedField(read_only=True)
+	medical_order = serializers.PrimaryKeyRelatedField(read_only=True)
 	month = serializers.SerializerMethodField()
 	month_name = serializers.SerializerMethodField()
 	invoice_number = serializers.CharField(read_only=True)
@@ -982,6 +1048,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
 			"id",
 			"equipment_order",
 			"equipment_order_id",
+			"medical_order",
+			"medical_order_id",
 			"invoice_number",
 			"invoice_date",
 			"month",
@@ -993,6 +1061,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
 			"notes",
 			"is_paid",
 			"payment_date",
+			"is_viewed_by_supplier",
 			"created_at",
 			"updated_at",
 		]
@@ -1005,3 +1074,26 @@ class InvoiceSerializer(serializers.ModelSerializer):
 	def get_month_name(self, obj):
 		"""Get month name from stored date"""
 		return obj.get_month_name()
+
+
+class AmbulanceRequestSerializer(serializers.ModelSerializer):
+    reporter = UserPublicSerializer(read_only=True)
+    hospital = HospitalSerializer(read_only=True)
+    hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
+    
+    class Meta:
+        model = AmbulanceRequest
+        fields = [
+            "id",
+            "reporter",
+            "hospital",
+            "hospital_id",
+            "patient_name",
+            "contact_phone",
+            "location",
+            "status",
+            "is_rewarded",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "is_rewarded", "status"]

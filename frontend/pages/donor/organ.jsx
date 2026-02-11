@@ -7,16 +7,22 @@ const DONATION_REQUESTS_STORAGE_KEY = "lifesaver:donation_requests"
 
 export default function OrganDonation() {
 	const [donationRequests, setDonationRequests] = useState([])
+	const [deceasedRequests, setDeceasedRequests] = useState([])
 	const [loadingRequests, setLoadingRequests] = useState(true)
 
 	async function loadDonationRequests() {
 		try {
-			const requests = await apiFetch("/donation-requests/?donor=me&request_type=ORGAN")
+			const [requests, deceased] = await Promise.all([
+				apiFetch("/donation-requests/?donor=me&request_type=ORGAN"),
+				apiFetch("/deceased-donor-requests/?user=me&status=COMPLETED")
+			])
 			setDonationRequests(requests)
+			setDeceasedRequests(deceased)
 			if (typeof window !== "undefined") {
 				localStorage.setItem(DONATION_REQUESTS_STORAGE_KEY, JSON.stringify(requests))
 			}
 		} catch (error) {
+			console.error("Failed to load requests:", error)
 			if (typeof window !== "undefined") {
 				const stored = localStorage.getItem(DONATION_REQUESTS_STORAGE_KEY)
 				if (stored) {
@@ -192,6 +198,53 @@ export default function OrganDonation() {
 								</div>
 							)}
 						</div>
+
+						{/* Deceased Donation History */}
+						{deceasedRequests.length > 0 && (
+							<div className="md:col-span-2 rounded-2xl border border-green-500/30 bg-[#131326] p-6 shadow-xl space-y-4">
+								<div className="flex items-center gap-3">
+									<h2 className="text-xl font-bold text-white uppercase tracking-tight">Deceased Donation History</h2>
+									<span className="rounded-full bg-green-500/20 px-3 py-1 text-xs font-bold text-green-400">VERIFIED RECORDS</span>
+								</div>
+
+								<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+									{deceasedRequests.map((req) => (
+										<div key={req.id} className="rounded-xl border border-green-500/20 bg-[#1A1A2E] p-5 hover:border-green-500/40 transition">
+											<div className="flex justify-between items-start mb-2">
+												<div>
+													<p className="font-bold text-white text-lg">{req.deceased_name}</p>
+													<p className="text-xs text-pink-100/60 font-mono mt-1">DOD: {req.deceased_date_of_death}</p>
+												</div>
+												<div className="h-8 w-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-400">
+													<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+														<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+													</svg>
+												</div>
+											</div>
+
+											<div className="space-y-2 mt-4">
+												<div className="flex items-center justify-between text-xs">
+													<span className="text-pink-100/50">Details Verified By:</span>
+													<span className="text-white font-medium">{req.hospital_name || "Hospital"}</span>
+												</div>
+												<div className="flex items-center justify-between text-xs">
+													<span className="text-pink-100/50">Organs Donated:</span>
+													<span className="text-green-300 font-bold">{req.organs_available}</span>
+												</div>
+												<div className="flex items-center justify-between text-xs">
+													<span className="text-pink-100/50">Completion Date:</span>
+													<span className="text-white font-medium">{new Date(req.updated_at).toLocaleDateString()}</span>
+												</div>
+											</div>
+
+											<div className="mt-4 pt-3 border-t border-white/5 text-center">
+												<p className="text-[10px] text-green-400/80 italic">"Thank you for this noble gift of life."</p>
+											</div>
+										</div>
+									))}
+								</div>
+							</div>
+						)}
 					</div>
 
 					<div className="flex justify-center">

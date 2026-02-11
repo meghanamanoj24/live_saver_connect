@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { apiFetch } from "../../lib/api"
 
-export default function Equipment({ profile }) {
+export default function Equipment({ profile, hospitalProfile }) {
 	const [equipment, setEquipment] = useState([])
 	const [loading, setLoading] = useState(true)
 	const [showAddForm, setShowAddForm] = useState(false)
@@ -21,6 +21,8 @@ export default function Equipment({ profile }) {
 		warranty_period_months: "12",
 		specifications: "",
 		is_new: true,
+		is_active: true,
+		image: null,
 	})
 
 	useEffect(() => {
@@ -36,7 +38,7 @@ export default function Equipment({ profile }) {
 			if (profile?.id) params.append("supplier", profile.id)
 
 			const data = await apiFetch(`/medical-equipment/?${params}`)
-			setEquipment(data.results || data)
+			setEquipment(Array.isArray(data) ? data : (data.results || []))
 		} catch (err) {
 			console.error("Failed to load equipment:", err)
 		} finally {
@@ -47,15 +49,25 @@ export default function Equipment({ profile }) {
 	async function handleAddEquipment(e) {
 		e.preventDefault()
 		try {
+			const finalEquipment = { ...newEquipment }
+			if (!finalEquipment.sku) {
+				const timestamp = new Date().getTime()
+				finalEquipment.sku = `EQ-${timestamp}-${Math.floor(Math.random() * 1000)}`
+			}
+
+			const formData = new FormData()
+			Object.keys(finalEquipment).forEach(key => {
+				if (finalEquipment[key] !== null) {
+					formData.append(key, finalEquipment[key])
+				}
+			})
+
+			formData.append("supplier_id", profile.id)
+
 			await apiFetch("/medical-equipment/", {
 				method: "POST",
-				body: JSON.stringify({
-					...newEquipment,
-					supplier_id: profile.id,
-					price: parseFloat(newEquipment.price),
-					quantity_available: parseInt(newEquipment.quantity_available),
-					warranty_period_months: parseInt(newEquipment.warranty_period_months),
-				}),
+				body: formData,
+				headers: {},
 			})
 			setShowAddForm(false)
 			setNewEquipment({
@@ -70,10 +82,45 @@ export default function Equipment({ profile }) {
 				warranty_period_months: "12",
 				specifications: "",
 				is_new: true,
+				is_active: true,
+				image: null,
 			})
 			loadEquipment()
 		} catch (err) {
-			alert(err.message || "Failed to add equipment")
+			let errorMsg = err.message || "Failed to add equipment"
+			if (err.body) {
+				const fieldErrors = Object.entries(err.body)
+					.map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors.join(", ") : errors}`)
+					.join("\n")
+				if (fieldErrors) errorMsg = fieldErrors
+			}
+			alert(errorMsg)
+		}
+	}
+
+	async function handleDeleteEquipment(id) {
+		if (!confirm("Are you sure you want to delete this equipment?")) return
+
+		try {
+			await apiFetch(`/medical-equipment/${id}/`, {
+				method: "DELETE",
+			})
+			loadEquipment()
+		} catch (err) {
+			alert(err.message || "Failed to delete equipment")
+		}
+	}
+
+	async function handleUpdateStock(id, newQuantity) {
+		if (newQuantity < 0) return
+		try {
+			await apiFetch(`/medical-equipment/${id}/`, {
+				method: "PATCH",
+				body: JSON.stringify({ quantity_available: newQuantity }),
+			})
+			loadEquipment()
+		} catch (err) {
+			alert(err.message || "Failed to update stock")
 		}
 	}
 
@@ -91,15 +138,30 @@ export default function Equipment({ profile }) {
 			return
 		}
 
-		try {
-			const shippingAddress = prompt("Enter shipping address:")
-			const shippingCity = prompt("Enter shipping city:")
-			const contactPhone = prompt("Enter contact phone:")
+		// Use hospital address if available, otherwise prompt
+		let shippingAddress, shippingCity, contactPhone
+
+		if (hospitalProfile) {
+			shippingAddress = hospitalProfile.address || "Not specified"
+			shippingCity = hospitalProfile.city || "Not specified"
+			contactPhone = hospitalProfile.phone || "Not specified"
+
+			const confirmMsg = `Order will be shipped to:\n${shippingAddress}, ${shippingCity}\nContact: ${contactPhone}\n\nContinue with checkout?`
+			if (!confirm(confirmMsg)) {
+				return
+			}
+		} else {
+			// Fallback to prompts if no hospital profile
+			shippingAddress = prompt("Enter shipping address:")
+			shippingCity = prompt("Enter shipping city:")
+			contactPhone = prompt("Enter contact phone:")
 
 			if (!shippingAddress || !shippingCity || !contactPhone) {
 				return
 			}
+		}
 
+		try {
 			const items = cart.map((item) => ({
 				product_type: item.product_type,
 				equipment_id: item.id,
@@ -117,7 +179,7 @@ export default function Equipment({ profile }) {
 			})
 
 			setCart([])
-			alert("Order placed successfully!")
+			alert("Order placed successfully! Check 'My Orders' tab to pay.")
 		} catch (err) {
 			alert(err.message || "Failed to place order")
 		}
@@ -193,8 +255,7 @@ export default function Equipment({ profile }) {
 						/>
 						<input
 							type="text"
-							required
-							placeholder="SKU"
+							placeholder="SKU (auto-generated if blank)"
 							value={newEquipment.sku}
 							onChange={(e) => setNewEquipment({ ...newEquipment, sku: e.target.value })}
 							className="px-4 py-2 rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] text-white"
@@ -250,6 +311,15 @@ export default function Equipment({ profile }) {
 							className="px-4 py-2 rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] text-white md:col-span-2"
 							rows="3"
 						/>
+						<div className="md:col-span-2">
+							<label className="block text-xs font-medium text-pink-100/70 mb-2">Equipment Image</label>
+							<input
+								type="file"
+								accept="image/*"
+								onChange={(e) => setNewEquipment({ ...newEquipment, image: e.target.files[0] })}
+								className="w-full text-sm text-pink-100/50 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-pink-600/20 file:text-pink-400 hover:file:bg-pink-600/30"
+							/>
+						</div>
 					</div>
 					<div className="mt-4 flex items-center gap-4">
 						<label className="flex items-center gap-2">
@@ -301,47 +371,89 @@ export default function Equipment({ profile }) {
 					{equipment.map((item) => (
 						<div
 							key={item.id}
-							className="p-6 rounded-xl border border-[#F6D6E3] bg-[#131326] hover:border-[#E91E63] transition-colors"
+							className="rounded-xl border border-[#F6D6E3] bg-[#131326] hover:border-[#E91E63] transition-colors overflow-hidden flex flex-col"
 						>
-							<div className="mb-4">
-								<h3 className="text-lg font-bold mb-2">{item.name}</h3>
-								{item.brand && <p className="text-sm text-pink-100/70 mb-1">Brand: {item.brand}</p>}
-								{item.model_number && (
-									<p className="text-sm text-pink-100/70 mb-1">Model: {item.model_number}</p>
-								)}
-								<p className="text-sm text-pink-100/70 mb-2">{item.equipment_type.replace("_", " ")}</p>
-								{item.description && (
-									<p className="text-sm text-pink-100/60 mb-2 line-clamp-2">{item.description}</p>
-								)}
-								{item.specifications && (
-									<p className="text-xs text-pink-100/50 mb-2 line-clamp-2">{item.specifications}</p>
-								)}
-							</div>
-							<div className="flex items-center justify-between mb-4">
-								<div>
-									<p className="text-2xl font-bold text-[#E91E63]">${item.price}</p>
-									<p className="text-xs text-pink-100/70">Stock: {item.quantity_available}</p>
-									<p className="text-xs text-pink-100/70">Warranty: {item.warranty_period_months} months</p>
+							{item.image ? (
+								<div className="h-48 w-full overflow-hidden bg-black/20">
+									<img src={item.image} alt={item.name} className="w-full h-full object-cover" />
 								</div>
-							</div>
-							<div className="mb-2">
-								{item.is_new ? (
-									<span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">New</span>
+							) : (
+								<div className="h-48 w-full bg-pink-600/10 flex items-center justify-center">
+									<svg className="w-12 h-12 text-pink-600/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+									</svg>
+								</div>
+							)}
+							<div className="p-6 flex-1 flex flex-col">
+								<div className="mb-4">
+									<h3 className="text-lg font-bold mb-2">{item.name}</h3>
+									{item.brand && <p className="text-sm text-pink-100/70 mb-1">Brand: {item.brand}</p>}
+									{item.model_number && (
+										<p className="text-sm text-pink-100/70 mb-1">Model: {item.model_number}</p>
+									)}
+									<p className="text-sm text-pink-100/70 mb-2">{item.equipment_type.replace("_", " ")}</p>
+									{item.description && (
+										<p className="text-sm text-pink-100/60 mb-2 line-clamp-2">{item.description}</p>
+									)}
+									{item.specifications && (
+										<p className="text-xs text-pink-100/50 mb-2 line-clamp-2">{item.specifications}</p>
+									)}
+								</div>
+								<div className="flex items-center justify-between mb-4">
+									<div>
+										<p className="text-2xl font-bold text-[#E91E63]">${item.price}</p>
+										<p className="text-xs text-pink-100/70">Stock: {item.quantity_available}</p>
+										<p className="text-xs text-pink-100/70">Warranty: {item.warranty_period_months} months</p>
+									</div>
+								</div>
+								<div className="mb-2">
+									{item.is_new ? (
+										<span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">New</span>
+									) : (
+										<span className="text-xs bg-yellow-600/20 text-yellow-400 px-2 py-1 rounded">Used</span>
+									)}
+								</div>
+								{isSupplier ? (
+									<div className="flex flex-col gap-4 mt-2">
+										<div className="flex items-center justify-between bg-[#1A1A2E] p-3 rounded-lg border border-[#F6D6E3]/20">
+											<span className="text-xs font-medium text-pink-100/70">Manage Stock:</span>
+											<div className="flex items-center gap-3">
+												<button
+													onClick={() => handleUpdateStock(item.id, item.quantity_available - 1)}
+													disabled={item.quantity_available <= 0}
+													className="w-8 h-8 flex items-center justify-center bg-red-600/20 text-red-400 rounded hover:bg-red-600/30 disabled:opacity-30"
+												>
+													-
+												</button>
+												<span className="w-8 text-center font-bold text-[#E91E63]">{item.quantity_available}</span>
+												<button
+													onClick={() => handleUpdateStock(item.id, item.quantity_available + 1)}
+													className="w-8 h-8 flex items-center justify-center bg-green-600/20 text-green-400 rounded hover:bg-green-600/30"
+												>
+													+
+												</button>
+											</div>
+										</div>
+										<div className="flex items-center justify-between">
+											<div className="text-xs text-pink-100/70">SKU: {item.sku}</div>
+											<button
+												onClick={() => handleDeleteEquipment(item.id)}
+												className="text-xs bg-red-600/20 text-red-400 px-3 py-1.5 rounded hover:bg-red-600/30 transition-colors"
+											>
+												Delete
+											</button>
+										</div>
+									</div>
 								) : (
-									<span className="text-xs bg-yellow-600/20 text-yellow-400 px-2 py-1 rounded">Used</span>
+									<button
+										onClick={() => addToCart(item)}
+										disabled={item.quantity_available === 0}
+										className="w-full px-4 py-2 bg-[#E91E63] rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										{item.quantity_available === 0 ? "Out of Stock" : "Add to Cart"}
+									</button>
 								)}
 							</div>
-							{isSupplier ? (
-								<div className="text-xs text-pink-100/70">SKU: {item.sku}</div>
-							) : (
-								<button
-									onClick={() => addToCart(item)}
-									disabled={item.quantity_available === 0}
-									className="w-full px-4 py-2 bg-[#E91E63] rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-								>
-									{item.quantity_available === 0 ? "Out of Stock" : "Add to Cart"}
-								</button>
-							)}
 						</div>
 					))}
 				</div>
