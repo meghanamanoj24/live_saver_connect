@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { apiFetch } from "../../lib/api"
 import MedicalStore from "../../components/medical-essential/MedicalStore"
 import Equipment from "../../components/medical-essential/Equipment"
+import HospitalRequests from "../../components/medical-essential/HospitalRequests"
 import Orders from "../../components/medical-essential/Orders"
 import Profile from "../../components/medical-essential/Profile"
 
@@ -130,6 +131,15 @@ export default function MedicalEssentialDashboard() {
 							Orders
 						</button>
 						<button
+							onClick={() => setActiveTab("requests")}
+							className={`px-6 py-3 font-medium transition-colors ${activeTab === "requests"
+								? "border-b-2 border-[#E91E63] text-[#E91E63]"
+								: "text-pink-100/70 hover:text-white"
+								}`}
+						>
+							Hospital Requests
+						</button>
+						<button
 							onClick={() => setActiveTab("profile")}
 							className={`px-6 py-3 font-medium transition-colors ${activeTab === "profile"
 								? "border-b-2 border-[#E91E63] text-[#E91E63]"
@@ -144,6 +154,7 @@ export default function MedicalEssentialDashboard() {
 					{activeTab === "store" && <MedicalStore profile={profile} />}
 					{activeTab === "equipment" && <Equipment profile={profile} />}
 					{activeTab === "orders" && <Orders profile={profile} />}
+					{activeTab === "requests" && <HospitalRequests profile={profile} />}
 					{activeTab === "profile" && <Profile profile={profile} onUpdate={loadProfile} />}
 				</div>
 			</main>

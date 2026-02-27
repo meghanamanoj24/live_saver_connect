@@ -16,7 +16,6 @@ from .models import (
 	HospitalNeed,
 	Appointment,
 	DeceasedDonorRequest,
-	AccidentAlert,
 	BloodDonationEvent,
 	MedicalEssential,
 	MedicalStoreProduct,
@@ -137,6 +136,7 @@ class DonorCouponSerializer(serializers.ModelSerializer):
 class EmergencyNeedSerializer(serializers.ModelSerializer):
 	created_by = UserPublicSerializer(read_only=True)
 	created_by_id = serializers.PrimaryKeyRelatedField(source="created_by", write_only=True, queryset=User.objects.all(), required=True)
+	accepted_by_details = UserPublicSerializer(source="accepted_by", read_only=True)
 
 	class Meta:
 		model = EmergencyNeed
@@ -157,6 +157,7 @@ class EmergencyNeedSerializer(serializers.ModelSerializer):
 			"latitude",
 			"longitude",
 			"accepted_by",
+			"accepted_by_details",
 			"poster_image",
 			"created_by",
 			"created_by_id",
@@ -347,11 +348,44 @@ class MarketplaceItemSerializer(serializers.ModelSerializer):
 		read_only_fields = ["created_at", "updated_at"]
 
 
-class DonationRequestSerializer(serializers.ModelSerializer):
-	donor = UserPublicSerializer(read_only=True)
-	donor_id = serializers.PrimaryKeyRelatedField(source="donor", write_only=True, queryset=User.objects.all(), required=True)
+class HospitalNeedSerializer(serializers.ModelSerializer):
 	hospital = HospitalSerializer(read_only=True)
 	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
+
+	class Meta:
+		model = HospitalNeed
+		fields = [
+			"id",
+			"hospital",
+			"hospital_id",
+			"need_type",
+			"required_blood_group",
+			"patient_name",
+			"patient_contact",
+			"time_to_reach",
+			"location_details",
+			"patient_details",
+			"poster_image",
+			"status",
+			"quantity_needed",
+			"needed_by",
+			"notes",
+			"created_at",
+			"updated_at",
+		]
+		read_only_fields = ["created_at", "updated_at"]
+
+
+class DonationRequestSerializer(serializers.ModelSerializer):
+	donor = UserPublicSerializer(read_only=True)
+	donor_id = serializers.PrimaryKeyRelatedField(source="donor", write_only=True, queryset=User.objects.all(), required=False)
+	hospital = HospitalSerializer(read_only=True)
+	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=False, allow_null=True)
+	
+	hospital_need = HospitalNeedSerializer(read_only=True)
+	hospital_need_id = serializers.PrimaryKeyRelatedField(source="hospital_need", write_only=True, queryset=HospitalNeed.objects.all(), required=False, allow_null=True)
+	emergency_need = EmergencyNeedSerializer(read_only=True)
+	emergency_need_id = serializers.PrimaryKeyRelatedField(source="emergency_need", write_only=True, queryset=EmergencyNeed.objects.all(), required=False, allow_null=True)
 
 	class Meta:
 		model = DonationRequest
@@ -361,6 +395,10 @@ class DonationRequestSerializer(serializers.ModelSerializer):
 			"donor_id",
 			"hospital",
 			"hospital_id",
+			"hospital_need",
+			"hospital_need_id",
+			"emergency_need",
+			"emergency_need_id",
 			"request_type",
 			"status",
 			"message",
@@ -376,29 +414,7 @@ class DonationRequestSerializer(serializers.ModelSerializer):
 		read_only_fields = ["created_at", "updated_at"]
 
 
-class HospitalNeedSerializer(serializers.ModelSerializer):
-	hospital = HospitalSerializer(read_only=True)
-	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
 
-	class Meta:
-		model = HospitalNeed
-		fields = [
-			"id",
-			"hospital",
-			"hospital_id",
-			"need_type",
-			"required_blood_group",
-			"patient_name",
-			"patient_details",
-			"poster_image",
-			"status",
-			"quantity_needed",
-			"needed_by",
-			"notes",
-			"created_at",
-			"updated_at",
-		]
-		read_only_fields = ["created_at", "updated_at"]
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
@@ -512,47 +528,6 @@ class DeceasedDonorRequestSerializer(serializers.ModelSerializer):
 		read_only_fields = ["created_at", "updated_at", "processed_at"]
 
 
-class AccidentAlertSerializer(serializers.ModelSerializer):
-	reported_by = UserPublicSerializer(read_only=True)
-	reported_by_id = serializers.PrimaryKeyRelatedField(
-		source="reported_by", 
-		write_only=True, 
-		queryset=User.objects.all(), 
-		allow_null=True, 
-		required=False
-	)
-	hospital_referred = HospitalSerializer(read_only=True)
-	hospital_referred_id = serializers.PrimaryKeyRelatedField(
-		source="hospital_referred", 
-		write_only=True, 
-		queryset=Hospital.objects.all(), 
-		allow_null=True, 
-		required=False
-	)
-
-	class Meta:
-		model = AccidentAlert
-		fields = [
-			"id",
-			"title",
-			"description",
-			"location",
-			"city",
-			"latitude",
-			"longitude",
-			"severity",
-			"status",
-			"reported_by",
-			"reported_by_id",
-			"accident_time",
-			"contact_phone",
-			"hospital_referred",
-			"hospital_referred_id",
-			"notes",
-			"created_at",
-			"updated_at",
-		]
-		read_only_fields = ["created_at", "updated_at"]
 
 
 class BloodDonationEventSerializer(serializers.ModelSerializer):
@@ -676,6 +651,7 @@ class MedicalStoreProductSerializer(serializers.ModelSerializer):
 			"image",
 			"is_active",
 			"is_prescription_required",
+			"created_from_request",
 			"created_at",
 			"updated_at",
 		]
@@ -706,6 +682,7 @@ class MedicalEquipmentSerializer(serializers.ModelSerializer):
 			"image",
 			"is_active",
 			"is_new",
+			"created_from_request",
 			"created_at",
 			"updated_at",
 		]
@@ -726,6 +703,7 @@ class MedicalOrderItemSerializer(serializers.ModelSerializer):
 			"quantity",
 			"unit_price",
 			"subtotal",
+			"item_name",
 			"created_at",
 			"updated_at",
 		]
@@ -750,6 +728,22 @@ class MedicalOrderSerializer(serializers.ModelSerializer):
 		allow_null=True
 	)
 
+	estimated_delivery = serializers.DateField(required=False, allow_null=True)
+	shipping_zip_code = serializers.CharField(required=False, allow_blank=True)
+	total_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False) # Handled in view
+	currency = serializers.CharField(required=False, default="USD")
+	
+	equipment_need_id = serializers.PrimaryKeyRelatedField(
+		source="equipment_need", 
+		write_only=True, 
+		queryset=EquipmentNeed.objects.all(), 
+		required=False, 
+		allow_null=True
+	)
+	
+	hospital_name = serializers.SerializerMethodField()
+	supplier_name = serializers.CharField(source="supplier.company_name", read_only=True)
+
 	class Meta:
 		model = MedicalOrder
 		fields = [
@@ -758,6 +752,8 @@ class MedicalOrderSerializer(serializers.ModelSerializer):
 			"user_id",
 			"supplier",
 			"supplier_id",
+			"supplier_name",
+			"hospital_name",
 			"order_type",
 			"order_number",
 			"total_amount",
@@ -772,14 +768,24 @@ class MedicalOrderSerializer(serializers.ModelSerializer):
 			"actual_shipping_at",
 			"estimated_arrival_at",
 			"rating",
-			# "appointment",  # Removed to break circular dependency
+			# "appointment", 
 			"appointment_id",
+			"equipment_need_id",
 			"items",
 			"invoice",
+			"is_complained",
+			"complaint_message",
 			"created_at",
 			"updated_at",
 		]
 		read_only_fields = ["order_number", "created_at", "updated_at", "invoice"]
+
+	def get_hospital_name(self, obj):
+		if obj.user and hasattr(obj.user, 'hospital_accounts'):
+			hospital = obj.user.hospital_accounts.first()
+			if hospital:
+				return hospital.name
+		return "Unknown Hospital"
 
 	def get_invoice(self, obj):
 		if hasattr(obj, 'invoice'):
@@ -970,38 +976,20 @@ class PerformanceTrackingSerializer(serializers.ModelSerializer):
 		read_only_fields = ["created_at", "updated_at"]
 
 
-class EquipmentNeedSerializer(serializers.ModelSerializer):
-	hospital = HospitalSerializer(read_only=True)
-	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
-	orders = serializers.SerializerMethodField()
-
+class EquipmentNeedBasicSerializer(serializers.ModelSerializer):
 	class Meta:
 		model = EquipmentNeed
 		fields = [
 			"id",
-			"hospital",
-			"hospital_id",
 			"equipment_name",
 			"equipment_type",
 			"quantity_needed",
-			"description",
 			"status",
 			"needed_by",
-			"notes",
-			"orders",
-			"created_at",
-			"updated_at",
 		]
-		read_only_fields = ["created_at", "updated_at"]
-	
-	def get_orders(self, obj):
-		from .models import EquipmentOrder
-		orders = EquipmentOrder.objects.filter(equipment_need=obj)
-		return EquipmentOrderSerializer(orders, many=True).data
-
 
 class EquipmentOrderSerializer(serializers.ModelSerializer):
-	equipment_need = EquipmentNeedSerializer(read_only=True)
+	equipment_need = EquipmentNeedBasicSerializer(read_only=True)
 	equipment_need_id = serializers.PrimaryKeyRelatedField(source="equipment_need", write_only=True, queryset=EquipmentNeed.objects.all(), required=True)
 	supplier = MedicalEssentialSerializer(read_only=True)
 	supplier_id = serializers.PrimaryKeyRelatedField(source="supplier", write_only=True, queryset=MedicalEssential.objects.all(), required=True)
@@ -1017,8 +1005,8 @@ class EquipmentOrderSerializer(serializers.ModelSerializer):
 			"supplier_id",
 			"quantity",
 			"unit_price",
-			"total_amount",
 			"currency",
+			"total_amount",
 			"status",
 			"notes",
 			"sent_date",
@@ -1028,11 +1016,50 @@ class EquipmentOrderSerializer(serializers.ModelSerializer):
 			"updated_at",
 		]
 		read_only_fields = ["total_amount", "created_at", "updated_at"]
-	
+
 	def get_invoice(self, obj):
-		if hasattr(obj, 'invoice'):
-			return InvoiceSerializer(obj.invoice).data
+		from .models import Invoice
+		invoice = Invoice.objects.filter(equipment_order=obj).first()
+		if invoice:
+			return InvoiceSerializer(invoice).data
 		return None
+
+class EquipmentNeedSerializer(serializers.ModelSerializer):
+	hospital = HospitalSerializer(read_only=True)
+	hospital_id = serializers.PrimaryKeyRelatedField(source="hospital", write_only=True, queryset=Hospital.objects.all(), required=True)
+	orders = serializers.SerializerMethodField()
+	requested_supplier_details = MedicalEssentialSerializer(source="requested_supplier", read_only=True)
+	requested_supplier_id = serializers.PrimaryKeyRelatedField(source="requested_supplier", write_only=True, queryset=MedicalEssential.objects.all(), required=False, allow_null=True)
+
+	class Meta:
+		model = EquipmentNeed
+		fields = [
+			"id",
+			"hospital",
+			"hospital_id",
+			"equipment_name",
+			"equipment_type",
+			"quantity_needed",
+			"description",
+			"status",
+			"needed_by",
+			"notes",
+			"orders",
+			"requested_supplier_details",
+			"requested_supplier_id",
+			"is_confirmed_by_supplier",
+			"suggested_price",
+			"created_at",
+			"updated_at",
+		]
+		read_only_fields = ["created_at", "updated_at", "is_confirmed_by_supplier"]
+	
+	def get_orders(self, obj):
+		from .models import EquipmentOrder
+		orders = EquipmentOrder.objects.filter(equipment_need=obj)
+		return EquipmentOrderSerializer(orders, many=True).data
+
+
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

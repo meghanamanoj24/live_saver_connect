@@ -5,6 +5,37 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { apiFetch } from "../../lib/api"
 
+// Blood Compatibility Map (Patient Group -> Donor Groups that patient can receive from)
+const BLOOD_RECEIVE_COMPATIBILITY = {
+	"O-": ["O-"],
+	"O+": ["O-", "O+"],
+	"A-": ["O-", "A-"],
+	"A+": ["O-", "O+", "A-", "A+"],
+	"B-": ["O-", "B-"],
+	"B+": ["O-", "O+", "B-", "B+"],
+	"AB-": ["O-", "A-", "B-", "AB-"],
+	"AB+": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+}
+
+// Platelet Compatibility Logic (Patient Group -> Donor Groups that patient can receive from)
+const PLATELET_RECEIVE_COMPATIBILITY = {
+	"O-": ["O-", "O+"],
+	"O+": ["O-", "O+"],
+	"A-": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"A+": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"B-": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"B+": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"AB-": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+	"AB+": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+}
+
+function isCompatible(donor_bg, patient_bg, type = "BLOOD") {
+	if (!donor_bg || !patient_bg) return false
+	const map = type === "BLOOD" ? BLOOD_RECEIVE_COMPATIBILITY : PLATELET_RECEIVE_COMPATIBILITY
+	const compatibleDonors = map[patient_bg] || []
+	return compatibleDonors.includes(donor_bg)
+}
+
 const UPCOMING_EVENTS = [
 	{
 		id: 1,
@@ -77,7 +108,6 @@ export default function DonorDashboard() {
 	const [donationRequests, setDonationRequests] = useState([])
 	const [emergencyNeeds, setEmergencyNeeds] = useState([])
 	const [matchedNeeds, setMatchedNeeds] = useState([])
-	const [accidentAlerts, setAccidentAlerts] = useState([])
 	const [loadingEmergencies, setLoadingEmergencies] = useState(true)
 
 	// Organ Registry State
@@ -300,31 +330,63 @@ export default function DonorDashboard() {
 	}
 
 	async function loadEmergencies() {
+		if (!donor) return
 		setLoadingEmergencies(true)
 		try {
-			const [needs, matches] = await Promise.all([
-				apiFetch("/needs/?status=OPEN"),
-				apiFetch("/needs/matched_needs/")
+			const donor_blood_group = donor.blood_group || ""
+			const city = donor.city || ""
+
+			const [emergencyNeeds, hospitalNeeds, alerts] = await Promise.all([
+				apiFetch("/needs/?status=OPEN").catch(() => []),
+				apiFetch("/hospital-needs/?active_only=true").catch(() => []),
 			])
-			setEmergencyNeeds(Array.isArray(needs) ? needs.slice(0, 5) : [])
-			setMatchedNeeds(Array.isArray(matches) ? matches : [])
-		} catch {
-			setEmergencyNeeds([])
-			setMatchedNeeds([])
-		}
 
-		try {
-			const matches = await apiFetch("/needs/matched_needs/")
-			setMatchedNeeds(Array.isArray(matches) ? matches : [])
-		} catch {
-			setMatchedNeeds([])
-		}
+			// Filter for matches based on compatibility
+			const matches = []
+			const others = []
 
-		try {
-			const alerts = await apiFetch("/accident-alerts/?status=ACTIVE")
-			setAccidentAlerts(Array.isArray(alerts) ? alerts.slice(0, 5) : [])
-		} catch {
-			setAccidentAlerts([])
+			const allNeeds = [
+				...(Array.isArray(emergencyNeeds) ? emergencyNeeds : []),
+				...(Array.isArray(hospitalNeeds) ? hospitalNeeds.map(h => ({ ...h, isHospitalNeed: true })) : [])
+			]
+
+			allNeeds.forEach(need => {
+				const patient_bg = need.required_blood_group
+				if (need.need_type === "BLOOD") {
+					if (isCompatible(donor_blood_group, patient_bg, "BLOOD")) {
+						matches.push(need)
+					} else {
+						others.push(need)
+					}
+				} else if (need.need_type === "PLATELETS") {
+					if (isCompatible(donor_blood_group, patient_bg, "PLATELETS")) {
+						matches.push(need)
+					} else {
+						others.push(need)
+					}
+				} else if (need.need_type === "ORGAN") {
+					// Organ needs matched by city or general donor profile
+					matches.push(need)
+				} else {
+					others.push(need)
+				}
+			})
+
+			// Deduplicate helper
+			const dedupe = (list) => {
+				const seen = new Set()
+				return list.filter(item => {
+					const key = `${item.id}-${item.isHospitalNeed ? 'HOSPITAL' : 'EMERGENCY'}-${item.need_type}`
+					if (seen.has(key)) return false
+					seen.add(key)
+					return true
+				})
+			}
+
+			setMatchedNeeds(dedupe(matches))
+			setEmergencyNeeds(dedupe(others).slice(0, 5))
+		} catch (error) {
+			console.error("Error loading emergencies:", error)
 		} finally {
 			setLoadingEmergencies(false)
 		}
@@ -517,42 +579,11 @@ export default function DonorDashboard() {
 				console.error("Failed to load emergency needs:", e)
 			}
 
-			// Load accident alerts
-			try {
-				const params = new URLSearchParams()
-				if (userLocation) {
-					params.append("latitude", userLocation.latitude)
-					params.append("longitude", userLocation.longitude)
-				}
-				params.append("status", "ACTIVE")
-				const alerts = await apiFetch(`/accident-alerts/?${params.toString()}`)
-				setAccidentAlerts(alerts.slice(0, 5))
-			} catch (e) {
-				console.error("Failed to load accident alerts:", e)
-			}
 		} catch (error) {
 			console.error("Failed to load organ registry data:", error)
 		}
 	}
 
-	useEffect(() => {
-		if (userLocation) {
-			// Reload accident alerts with location
-			async function reloadAlerts() {
-				try {
-					const params = new URLSearchParams()
-					params.append("latitude", userLocation.latitude)
-					params.append("longitude", userLocation.longitude)
-					params.append("status", "ACTIVE")
-					const alerts = await apiFetch(`/accident-alerts/?${params.toString()}`)
-					setAccidentAlerts(alerts.slice(0, 5))
-				} catch (e) {
-					console.error("Failed to load accident alerts:", e)
-				}
-			}
-			reloadAlerts()
-		}
-	}, [userLocation])
 
 	const selectedOrgansSet = useMemo(() => new Set(organForm.organs_to_donate), [organForm.organs_to_donate])
 
@@ -950,6 +981,15 @@ export default function DonorDashboard() {
 												}`}>
 												{need.need_type}
 											</span>
+											{need.isHospitalNeed ? (
+												<span className="ml-1 px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-400 border border-purple-500/30">
+													Hospital
+												</span>
+											) : (
+												<span className="ml-1 px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30">
+													Public
+												</span>
+											)}
 										</div>
 
 										<h3 className="text-sm font-bold text-white mb-2 line-clamp-1">{need.title}</h3>

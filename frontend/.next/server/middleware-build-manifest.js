@@ -24,25 +24,45 @@ self.__BUILD_MANIFEST = {
       "static/chunks/main.js",
       "static/chunks/pages/_error.js"
     ],
-    "/donor/blood": [
+    "/donor/book-appointment": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/donor/blood.js"
+      "static/chunks/pages/donor/book-appointment.js"
+    ],
+    "/donor/dashboard": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/donor/dashboard.js"
+    ],
+    "/donor/organ": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/donor/organ.js"
+    ],
+    "/hospital/appointments": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/hospital/appointments.js"
     ],
     "/hospital/dashboard": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
       "static/chunks/pages/hospital/dashboard.js"
     ],
-    "/medical-essential": [
+    "/hospital/donors": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/medical-essential.js"
+      "static/chunks/pages/hospital/donors.js"
     ],
-    "/needs/post": [
+    "/hospital/needs": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/needs/post.js"
+      "static/chunks/pages/hospital/needs.js"
+    ],
+    "/register/organ": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/register/organ.js"
     ]
   },
   "ampFirstPages": []

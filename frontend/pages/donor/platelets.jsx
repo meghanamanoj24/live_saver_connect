@@ -5,17 +5,29 @@ import { apiFetch } from "../../lib/api"
 
 const DONATION_HISTORY_PLACEHOLDER = []
 const DONOR_PROFILE_STORAGE_KEY = "lifesaver:donor_profile"
+const HEALTH_REPORT_STORAGE_KEY_PLATELETS = "lifesaver:health_report_uploaded_platelets"
+const HEALTH_REPORT_FILENAME_KEY_PLATELETS = "lifesaver:health_report_filename_platelets"
+const LAST_RESET_REQUEST_ID_KEY = "lifesaver:last_reset_request_id_platelets"
 
-// Platelet Compatibility Logic (Donors -> Recipients)
-const PLATELET_COMPATIBILITY = {
-	"A+": ["A+", "A-", "AB+", "AB-"],
-	"A-": ["A+", "A-", "AB+", "AB-"],
-	"B+": ["B+", "B-", "AB+", "AB-"],
-	"B-": ["B+", "B-", "AB+", "AB-"],
-	"AB+": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], // Universal Donor
-	"AB-": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], // Universal Donor
-	"O+": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], // Universal Donor (per specific requirement)
-	"O-": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"], // Universal Donor
+// Platelet Compatibility Logic (Patient Group -> Donor Groups that patient can receive from)
+// Consistent with backend utils_email.py
+const PLATELET_RECEIVE_COMPATIBILITY = {
+	"O-": ["O-", "O+"],
+	"O+": ["O-", "O+"],
+	"A-": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"A+": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"B-": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"B+": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"AB-": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+	"AB+": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+}
+
+// Helper to check if a donor's blood group is compatible with a patient's required group for platelets
+function isPlateletCompatible(donor_bg, patient_bg) {
+	if (!patient_bg || patient_bg === "Any" || patient_bg === "Unknown") return true
+	if (!donor_bg) return false
+	const compatibleDonors = PLATELET_RECEIVE_COMPATIBILITY[patient_bg] || []
+	return compatibleDonors.includes(donor_bg)
 }
 
 function formatName(user) {
@@ -34,11 +46,13 @@ export default function PlateletsDonation() {
 	const [availabilityError, setAvailabilityError] = useState(null)
 	const [matchedNeeds, setMatchedNeeds] = useState([])
 	const [emergencyNeeds, setEmergencyNeeds] = useState([])
+	const [rawNeeds, setRawNeeds] = useState([])
 	const [activeTab, setActiveTab] = useState("matches")
 	const [donationRequests, setDonationRequests] = useState([])
 	const [loadingRequests, setLoadingRequests] = useState(true)
 	const [coupons, setCoupons] = useState([])
 	const [loadingCoupons, setLoadingCoupons] = useState(true)
+	const [downloadHistory, setDownloadHistory] = useState([])
 
 	// Health Verification State
 	const [healthReportUploaded, setHealthReportUploaded] = useState(false)
@@ -48,6 +62,7 @@ export default function PlateletsDonation() {
 	const [showEligibilityPopup, setShowEligibilityPopup] = useState(false)
 	const [eligibilityMessage, setEligibilityMessage] = useState("")
 	const [confirmingAttendance, setConfirmingAttendance] = useState(null)
+	const [updatingWorkflow, setUpdatingWorkflow] = useState(null)
 
 	const DONATION_REQUESTS_STORAGE_KEY = "lifesaver:donation_requests"
 
@@ -87,26 +102,45 @@ export default function PlateletsDonation() {
 		}
 	}, [])
 
+	const loadDownloadHistory = useCallback(async () => {
+		try {
+			const data = await apiFetch("/donors/download_history/?report_type=PLATELETS")
+			setDownloadHistory(data)
+		} catch (err) {
+			console.error("Failed to load download history:", err)
+		}
+	}, [])
+
+	const verifiedPdfUrl = useMemo(() => {
+		if (!downloadHistory || downloadHistory.length === 0) return null
+		return downloadHistory[0].pdf_file
+	}, [downloadHistory])
+
 	useEffect(() => {
 		loadDonationRequests()
 		loadCoupons()
+		loadDownloadHistory()
 
 		const handleVisibilityChange = () => {
 			if (document.visibilityState === "visible") {
 				loadDonationRequests()
 				loadCoupons()
+				loadDownloadHistory()
 			}
 		}
 		document.addEventListener("visibilitychange", handleVisibilityChange)
 
-		const handleFocus = () => loadDonationRequests()
+		const handleFocus = () => {
+			loadDonationRequests()
+			loadDownloadHistory()
+		}
 		window.addEventListener("focus", handleFocus)
 
 		return () => {
 			document.removeEventListener("visibilitychange", handleVisibilityChange)
 			window.removeEventListener("focus", handleFocus)
 		}
-	}, [loadDonationRequests])
+	}, [loadDonationRequests, loadDownloadHistory])
 
 	// Health Status State
 	const [showHealthForm, setShowHealthForm] = useState(false)
@@ -186,27 +220,36 @@ export default function PlateletsDonation() {
 			return
 		}
 
-		const { jsPDF } = await import("jspdf")
-		const doc = new jsPDF()
-		const pageWidth = doc.internal.pageSize.getWidth()
+		try {
+			const blob = await apiFetch('/donors/generate_health_report/', {
+				method: 'POST',
+				responseAs: 'blob',
+				body: JSON.stringify({
+					...healthAssessment,
+					age: healthStatus.age,
+					weight: healthStatus.weight,
+					report_type: "PLATELETS"
+				})
+			});
+			const url = window.URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
 
-		doc.setFillColor(233, 30, 99)
-		doc.rect(0, 0, pageWidth, 40, 'F')
-		doc.setTextColor(255, 255, 255)
-		doc.setFontSize(24)
-		doc.text("PLATELET DONOR HEALTH REPORT", pageWidth / 2, 20, { align: 'center' })
+			const name = donorName?.replace(/\s+/g, '_') || 'Donor';
+			const dateStr = new Date().toISOString().split('T')[0];
+			link.setAttribute('download', `Platelet_Health_Report_${name}_${dateStr}.pdf`);
 
-		doc.setTextColor(0, 0, 0)
-		let y = 60
-		doc.text(`Donor: ${donorName || 'N/A'}`, 20, y)
-		y += 10
-		doc.text(`Date: ${new Date().toLocaleDateString()}`, 20, y)
-		y += 10
-		doc.text(`Health Score: ${healthAssessment.healthScore}/100`, 20, y)
-		y += 10
-		doc.text(`Status: ${healthAssessment.canDonate ? 'ELIGIBLE' : 'INELIGIBLE'}`, 20, y)
+			document.body.appendChild(link);
+			link.click();
+			link.parentNode.removeChild(link);
+			window.URL.revokeObjectURL(url);
 
-		doc.save("Platelet_Health_Report.pdf")
+			loadDownloadHistory()
+			alert("Health report generated successfully! This report is SECURED and can now be verified.");
+		} catch (err) {
+			console.error("PDF Error:", err);
+			alert(err.message || "Error generating secure report. Please try again.");
+		}
 	}
 
 	useEffect(() => {
@@ -244,54 +287,132 @@ export default function PlateletsDonation() {
 
 	const loadNeeds = useCallback(async () => {
 		try {
-			const [allNeeds, matches] = await Promise.all([
+			const donor_blood_group = profile?.blood_group || localProfile?.blood_group || ""
+			const city = profile?.city || localProfile?.city || ""
+
+			// Use Promise.allSettled so one failure doesn't kill the entire fetch
+			const results = await Promise.allSettled([
 				apiFetch("/needs/?need_type=PLATELETS&status=OPEN"),
-				apiFetch("/needs/matched_needs/")
+				apiFetch("/hospital-needs/?need_type=PLATELETS&active_only=true"),
+				apiFetch("/needs/matched_needs/"),
+				apiFetch(`/hospital-needs/?need_type=PLATELETS&donor_blood_group=${donor_blood_group}&city=${city}&active_only=true`)
 			])
-			setEmergencyNeeds(allNeeds || [])
-			setMatchedNeeds((matches || []).filter(m => m.need_type === "PLATELETS"))
-		} catch {
-			setEmergencyNeeds([])
-			setMatchedNeeds([])
+
+			// Extract results safely — failed fetches become empty arrays
+			const getValue = (result) => {
+				if (result.status === "fulfilled") {
+					const val = result.value
+					// Handle both array responses and paginated { results: [...] } responses
+					if (Array.isArray(val)) return val
+					if (val && Array.isArray(val.results)) return val.results
+					return []
+				}
+				console.warn("Fetch failed:", result.reason)
+				return []
+			}
+
+			const allNeeds = getValue(results[0])
+			const hospitalAll = getValue(results[1])
+
+			console.log('DEBUG: Raw fetch results', {
+				allNeedsRaw: results[0].status === 'fulfilled' ? (Array.isArray(results[0].value) ? results[0].value.length : 'not array') : results[0].reason,
+				hospitalAllRaw: results[1].status === 'fulfilled' ? (Array.isArray(results[1].value) ? results[1].value.length : 'not array') : results[1].reason
+			})
+
+			const combinedAllRaw = [
+				...allNeeds,
+				...hospitalAll.map(h => ({ ...h, isHospitalNeed: true }))
+			]
+
+			setRawNeeds(combinedAllRaw)
+		} catch (error) {
+			console.error("Error loading platelet needs:", error)
+			setRawNeeds([])
 		}
-	}, [])
+	}, [profile, localProfile])
+
+	// Reactive filtering for Need Hiding and Compatibility
+	useEffect(() => {
+		const donor_blood_group = profile?.blood_group || localProfile?.blood_group || ""
+
+		const respondedNeedIds = new Set(donationRequests.map(r => {
+			const needId = r.is_hospital_request ? r.hospital_need?.id || r.hospital_need : r.emergency_need?.id || r.emergency_need;
+			return `${needId}-${r.is_hospital_request ? 'HOSPITAL' : 'EMERGENCY'}`;
+		}));
+
+		const filteredNeeds = rawNeeds.filter(need => {
+			const key = `${need.id}-${need.isHospitalNeed ? 'HOSPITAL' : 'EMERGENCY'}`;
+			return !respondedNeedIds.has(key);
+		});
+
+		// Sort by created_at descending (most recent first)
+		const combinedAll = [...filteredNeeds].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+		const finalMatches = []
+		const finalOthers = []
+
+		combinedAll.forEach(need => {
+			const patient_bg = need.required_blood_group
+			if (isPlateletCompatible(donor_blood_group, patient_bg)) {
+				finalMatches.push(need)
+			} else {
+				finalOthers.push(need)
+			}
+		})
+
+		const dedupe = (list) => {
+			const seen = new Set()
+			return list.filter(item => {
+				const key = `${item.id}-${item.isHospitalNeed ? 'HOSPITAL' : 'EMERGENCY'}`
+				if (seen.has(key)) return false
+				seen.add(key)
+				return true
+			})
+		}
+
+		setEmergencyNeeds(dedupe(combinedAll))
+		setMatchedNeeds(dedupe(finalMatches))
+	}, [rawNeeds, donationRequests, profile, localProfile])
+
 
 	useEffect(() => {
 		async function run() {
+			// Only load profile on mount
 			setLoading(true)
 			try {
 				await loadProfile()
-				// Needs are loaded but not filtered yet - we wait for profile to filter
-				await loadNeeds()
-				setErrorState(null)
 			} catch (err) {
-				setErrorState({ type: "general", message: err.message || "Unable to load platelet data." })
-			} finally {
-				setLoading(false)
+				setErrorState({ type: "general", message: err.message || "Unable to load donor profile." })
 			}
 		}
 		run()
-	}, [loadProfile, loadNeeds])
+	}, [loadProfile])
+
+	// separate effect to load needs when profile changes or is loaded
+	useEffect(() => {
+		async function fetchNeeds() {
+			// If profile is still loading (and not found yet), we might wait, but loadNeeds handles null profile
+			try {
+				await loadNeeds()
+				setErrorState(null)
+			} catch (err) {
+				console.error(err)
+			} finally {
+				// We can stop loading now
+				setLoading(false)
+			}
+		}
+		fetchNeeds()
+	}, [loadNeeds])
 
 	const donor = profile || localProfile || null
 	const donorName = donor?.name
 
-	// Calculate compatible groups
-	const compatibleGroups = useMemo(() => {
-		if (!donor || !donor.blood_group) return []
-		return PLATELET_COMPATIBILITY[donor.blood_group] || []
-	}, [donor])
+	// Calculate compatible groups (deprecated as we use isPlateletCompatible)
+	const compatibleGroups = useMemo(() => [], [])
 
 	// Filter matched needs based on compatibility
-	const filteredMatchedNeeds = useMemo(() => {
-		if (!matchedNeeds.length || !compatibleGroups.length) return []
-		return matchedNeeds.filter(need => {
-			// If need has no specific blood group requirement, show it?? 
-			// Usually needs are specific. Assuming need.required_blood_group exists.
-			if (!need.required_blood_group) return true
-			return compatibleGroups.includes(need.required_blood_group)
-		})
-	}, [matchedNeeds, compatibleGroups])
+	const filteredMatchedNeeds = useMemo(() => matchedNeeds, [matchedNeeds])
 	const totalPlateletDonations = useMemo(
 		() => DONATION_HISTORY_PLACEHOLDER.filter((entry) => entry.type === "Platelets").length,
 		[],
@@ -319,7 +440,7 @@ export default function PlateletsDonation() {
 
 	// Computed values for request cycle management
 	const hasActiveRequest = useMemo(() => {
-		return donationRequests.some(r => ["PENDING", "ACCEPTED", "ARRIVED"].includes(r.status))
+		return donationRequests.some(r => ["PENDING", "ACCEPTED", "SCHEDULED", "SCHEDULE_CONFIRMED", "REACHING", "ARRIVED"].includes(r.status))
 	}, [donationRequests])
 
 	const mostRecentRequest = useMemo(() => {
@@ -335,51 +456,80 @@ export default function PlateletsDonation() {
 
 	// Determine if the donor can request a new donation
 	const canRequestNewDonation = useMemo(() => {
-		// Cannot request if there's an active request in progress
-		if (hasActiveRequest) return false
-		// Must have health report uploaded for this cycle
-		if (!healthReportUploaded) return false
-		// Must be health eligible
-		if (!healthEligible) return false
-		return true
-	}, [hasActiveRequest, healthReportUploaded, healthEligible])
+		// Must have health report uploaded for this cycle and be eligible
+		// We allow the button to be enabled even if hasActiveRequest is true,
+		// so that users can click it and see the explanation popup.
+		return healthReportUploaded && healthEligible
+	}, [healthReportUploaded, healthEligible])
 
 	// Load health report upload status and eligibility from localStorage
 	useEffect(() => {
 		if (typeof window === "undefined") return
-		const uploadStatus = localStorage.getItem("lifesaver:health_report_uploaded")
+		const uploadStatus = localStorage.getItem(HEALTH_REPORT_STORAGE_KEY_PLATELETS)
 		if (uploadStatus === "true") {
 			setHealthReportUploaded(true)
-		}
-
-		// Check health eligibility from health history
-		const savedHistory = localStorage.getItem("lifesaver:health_history")
-		if (savedHistory) {
-			try {
-				const history = JSON.parse(savedHistory)
-				if (history.length > 0) {
-					const lastEntry = history[history.length - 1]
-					// Score >= 80 means eligible
-					if (lastEntry.score >= 80) {
-						setHealthEligible(true)
-					}
-				}
-			} catch {
-				// Ignore parse errors
-			}
+			setHealthEligible(true)
 		}
 	}, [])
+
+	// Sync with backend download history
+	useEffect(() => {
+		// If we already have a confirmed upload in local state/storage, don't potentially overwrite it with empty history
+		// unless we explicitly want to re-validate freshness against a NEW request.
+		const locallyVerified = localStorage.getItem(HEALTH_REPORT_STORAGE_KEY_PLATELETS) === "true"
+
+		if (downloadHistory.length > 0) {
+			const latestReport = downloadHistory[0]
+			const reportTime = new Date(latestReport.timestamp).getTime()
+
+			// Check if this report was generated AFTER the most recent request
+			let isReportFresh = true
+			if (mostRecentRequest) {
+				const requestTime = new Date(mostRecentRequest.created_at).getTime()
+				if (reportTime <= requestTime) {
+					isReportFresh = false
+				}
+			}
+
+			if (isReportFresh) {
+				setHealthReportUploaded(true)
+				setHealthEligible(true)
+			} else {
+				// Only overwrite if we aren't locally verified as well (or if we strictly want server history to rule)
+				// But for now, if history says "old", but user just uploaded, we might want to keep "true".
+				// However, usually "upload" implies verifying a report. 
+				// The safeguard: if user JUST uploaded, locallyVerified is true.
+				if (!locallyVerified) {
+					setHealthReportUploaded(false)
+					setHealthEligible(false)
+				}
+			}
+		} else {
+			// No history means nothing is uploaded/verified on server records
+			// BUT if user just manually uploaded and verified, we trust that.
+			if (!locallyVerified) {
+				setHealthReportUploaded(false)
+				setHealthEligible(false)
+			}
+		}
+	}, [downloadHistory, mostRecentRequest])
 
 	// Reset health report status when donation is COMPLETED or REJECTED (for the cycle loop)
 	useEffect(() => {
 		if (typeof window === "undefined" || !mostRecentRequest) return
 
-		if (["COMPLETED", "REJECTED"].includes(mostRecentRequest.status)) {
-			// Clear the health report for this cycle - donor must upload a new one
-			localStorage.removeItem("lifesaver:health_report_uploaded")
-			localStorage.removeItem("lifesaver:health_report_filename")
+		const lastResetId = localStorage.getItem(LAST_RESET_REQUEST_ID_KEY)
+
+		if (["COMPLETED", "REJECTED", "ACCEPTED"].includes(mostRecentRequest.status) && lastResetId !== String(mostRecentRequest.id)) {
+			// Clear the health report for this cycle
+			localStorage.removeItem(HEALTH_REPORT_STORAGE_KEY_PLATELETS)
+			localStorage.removeItem(HEALTH_REPORT_FILENAME_KEY_PLATELETS)
+			localStorage.setItem(LAST_RESET_REQUEST_ID_KEY, String(mostRecentRequest.id))
+
 			setHealthReportUploaded(false)
 			setHealthReportFile(null)
+			setHealthEligible(false)
+			setHealthAssessment(null)
 		}
 	}, [mostRecentRequest])
 
@@ -405,6 +555,65 @@ export default function PlateletsDonation() {
 		window.location.href = "/donor/donate?type=PLATELETS"
 	}
 
+	const handleWillingToDonate = async (need) => {
+		if (!donor) {
+			setErrorState({ type: "general", message: "Please log in to donate." })
+			return
+		}
+
+		setUpdatingWorkflow(need.id)
+		try {
+			const body = {
+				request_type: "PLATELETS",
+				donor: donor.id,
+				status: "PENDING",
+			}
+
+			if (need.isHospitalNeed) {
+				body.hospital_id = need.hospital.id
+				body.hospital_need_id = need.id
+				body.patient_name = need.patient_name
+			} else {
+				body.emergency_need_id = need.id
+			}
+
+			await apiFetch("/donation-requests/", {
+				method: "POST",
+				body: JSON.stringify(body),
+			})
+
+			await loadDonationRequests()
+			alert("Request sent successfully! The poster has been notified.")
+
+			// Redirect to needs/post for emergency needs to allow scheduling/confirmation (Self-Test Flow)
+			if (!need.isHospitalNeed) {
+				window.location.href = "/needs/post"
+			}
+		} catch (error) {
+			console.error("Failed to send donation request:", error)
+			alert(error.message || "Failed to send request.")
+		} finally {
+			setUpdatingWorkflow(null)
+		}
+	}
+
+	// Handle workflow updates
+	async function handleWorkflowAction(requestId, action) {
+		setUpdatingWorkflow(requestId)
+		try {
+			await apiFetch(`/donation-requests/${requestId}/${action}/`, {
+				method: "POST"
+			})
+			await loadDonationRequests()
+			alert(`Action "${action.replace('_', ' ')}" successful!`)
+		} catch (error) {
+			console.error(`Error performing ${action}:`, error)
+			alert(`Failed to perform ${action}. Please try again.`)
+		} finally {
+			setUpdatingWorkflow(null)
+		}
+	}
+
 	// Handle confirm attendance (donor confirms they will come)
 	async function handleConfirmAttendance(requestId) {
 		setConfirmingAttendance(requestId)
@@ -422,8 +631,27 @@ export default function PlateletsDonation() {
 		}
 	}
 
+	// Handle delete request
+	async function handleDeleteRequest(requestId) {
+		if (!window.confirm("Are you sure you want to cancel this pending request?")) return
+
+		setUpdatingWorkflow(requestId)
+		try {
+			await apiFetch(`/donation-requests/${requestId}/`, {
+				method: "DELETE"
+			})
+			await loadDonationRequests()
+			alert("Request cancelled successfully.")
+		} catch (error) {
+			console.error("Error deleting request:", error)
+			alert("Failed to cancel request. Please try again.")
+		} finally {
+			setUpdatingWorkflow(null)
+		}
+	}
+
 	// Handle health report file upload
-	function handleHealthReportUpload(event) {
+	async function handleHealthReportUpload(event) {
 		const file = event.target.files?.[0]
 		setUploadError(null)
 
@@ -443,24 +671,38 @@ export default function PlateletsDonation() {
 			return
 		}
 
-		// Store file and update status
-		setHealthReportFile(file)
-		setHealthReportUploaded(true)
-		setUploadError(null)
+		try {
+			const formData = new FormData()
+			formData.append('file', file)
 
-		// Persist to localStorage
-		if (typeof window !== "undefined") {
-			localStorage.setItem("lifesaver:health_report_uploaded", "true")
-			localStorage.setItem("lifesaver:health_report_filename", file.name)
+			const response = await apiFetch('/donors/verify_health_report/', {
+				method: 'POST',
+				body: formData,
+			})
+
+			if (response.valid) {
+				setHealthReportFile(file)
+				setHealthReportUploaded(true)
+				setHealthEligible(true)
+				localStorage.setItem(HEALTH_REPORT_STORAGE_KEY_PLATELETS, "true")
+				localStorage.setItem(HEALTH_REPORT_FILENAME_KEY_PLATELETS, file.name)
+				alert(response.detail || "Health report verified successfully! You can now request platelet donations.")
+				window.scrollTo({ top: 0, behavior: 'smooth' })
+			} else {
+				alert(`Verification Failed: ${response.detail}`)
+				event.target.value = ""
+			}
+		} catch (err) {
+			console.error("Verification Error:", err)
+			alert(err.message || "Error verifying report integrity. Please upload the original PDF you downloaded.")
+			event.target.value = ""
 		}
-
-		alert(`Health report "${file.name}" uploaded successfully! You can now request platelet donations.`)
 	}
 
 	// Calculate stats
 	const plateletStats = useMemo(() => {
 		const completed = donationRequests.filter(r => r.status === "COMPLETED").length
-		const progress = completed % 3
+		const progress = (completed > 0 && completed % 3 === 0) ? 0 : (completed % 3)
 		const percentage = (progress / 3) * 100
 		return { completed, progress, percentage }
 	}, [donationRequests])
@@ -598,9 +840,21 @@ export default function PlateletsDonation() {
 												</svg>
 											</div>
 										</div>
-										<div className="flex-1">
-											<p className="text-sm font-semibold text-green-300">✓ Health Report Verified</p>
-											<p className="text-xs text-green-200/80 mt-0.5">You can now request platelet donations</p>
+										<div className="flex-1 flex items-center justify-between gap-4">
+											<div>
+												<p className="text-sm font-semibold text-green-300">Verified Report</p>
+												<p className="text-xs text-green-200/80 mt-0.5">Check another report for next donation</p>
+											</div>
+											{verifiedPdfUrl && (
+												<a
+													href={verifiedPdfUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-bold text-white hover:bg-blue-600 transition shadow-sm uppercase whitespace-nowrap"
+												>
+													View Verified Report
+												</a>
+											)}
 										</div>
 									</div>
 								</div>
@@ -654,6 +908,9 @@ export default function PlateletsDonation() {
 											const statusColors = {
 												PENDING: "bg-yellow-500/10 text-yellow-300 border-yellow-500/40",
 												ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/40",
+												SCHEDULED: "bg-purple-500/10 text-purple-300 border-purple-500/40",
+												SCHEDULE_CONFIRMED: "bg-cyan-500/10 text-cyan-300 border-cyan-500/40",
+												REACHING: "bg-orange-500/10 text-orange-300 border-orange-500/40",
 												ARRIVED: "bg-blue-500/10 text-blue-300 border-blue-500/40",
 												REJECTED: "bg-red-500/10 text-red-300 border-red-500/40",
 												COMPLETED: "bg-purple-500/10 text-purple-300 border-purple-500/40",
@@ -674,10 +931,17 @@ export default function PlateletsDonation() {
 														<div className="space-y-3 mb-6">
 															{request.status === "PENDING" && (
 																<div className="rounded-lg bg-yellow-500/5 p-3 border border-yellow-500/10">
-																	<p className="text-xs text-yellow-200/90 font-medium leading-relaxed">⌛ Your booking is awaiting confirmation from the medical staff.</p>
+																	<p className="text-xs text-yellow-200/90 font-medium leading-relaxed mb-3">⌛ Your booking is awaiting confirmation from the medical staff.</p>
+																	<button
+																		onClick={() => handleDeleteRequest(request.id)}
+																		disabled={updatingWorkflow === request.id}
+																		className="w-full rounded-lg bg-red-600/10 py-2.5 text-sm font-bold text-red-400 border border-red-600/30 hover:bg-red-600/20 transition uppercase tracking-wider flex items-center justify-center gap-2"
+																	>
+																		{updatingWorkflow === request.id ? "Processing..." : "Cancel Request 🗑️"}
+																	</button>
 																</div>
 															)}
-															{request.status === "ACCEPTED" && (
+															{(request.status === "ACCEPTED" || request.status === "SCHEDULED" || request.status === "SCHEDULE_CONFIRMED") && (
 																<div className="rounded-lg bg-green-500/5 p-3 border border-green-500/10">
 																	<p className="text-xs text-green-300 font-bold mb-1 flex items-center gap-1.5">
 																		<span className="flex h-4 w-4 items-center justify-center rounded-full bg-green-500/20 text-[8px]">✓</span>
@@ -694,26 +958,37 @@ export default function PlateletsDonation() {
 																		</div>
 																	)}
 																	{request.notes && <p className="text-[10px] text-green-100/60 mt-2 italic">{request.notes}</p>}
-																	<button
-																		type="button"
-																		onClick={() => handleConfirmAttendance(request.id)}
-																		disabled={confirmingAttendance === request.id}
-																		className="mt-3 w-full rounded-lg bg-green-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-green-500/20 hover:bg-green-500 disabled:opacity-50 transition uppercase tracking-wider flex items-center justify-center gap-2"
-																	>
-																		{confirmingAttendance === request.id ? (
-																			<>
-																				<span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-																				Confirming...
-																			</>
-																		) : (
-																			<>
-																				<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																					<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-																				</svg>
-																				Confirm I Will Attend
-																			</>
+
+																	<div className="mt-3 flex flex-col gap-2">
+																		{request.status === "SCHEDULED" && (
+																			<button
+																				onClick={() => handleWorkflowAction(request.id, 'confirm_schedule')}
+																				disabled={updatingWorkflow === request.id}
+																				className="w-full rounded-lg bg-cyan-600 py-2.5 text-sm font-bold text-white shadow-lg hover:bg-cyan-500 transition uppercase tracking-wider flex items-center justify-center gap-2"
+																			>
+																				Confirm Schedule ✅
+																			</button>
 																		)}
-																	</button>
+																		{request.status === "SCHEDULE_CONFIRMED" && (
+																			<button
+																				onClick={() => handleWorkflowAction(request.id, 'confirm_reaching')}
+																				disabled={updatingWorkflow === request.id}
+																				className="w-full rounded-lg bg-orange-600 py-2.5 text-sm font-bold text-white shadow-lg hover:bg-orange-500 transition uppercase tracking-wider flex items-center justify-center gap-2"
+																			>
+																				I am Reaching 🚗
+																			</button>
+																		)}
+																		{["REACHING", "ACCEPTED", "SCHEDULE_CONFIRMED"].includes(request.status) && (
+																			<button
+																				type="button"
+																				onClick={() => handleConfirmAttendance(request.id)}
+																				disabled={confirmingAttendance === request.id || updatingWorkflow === request.id}
+																				className="w-full rounded-lg bg-[#E91E63] py-2.5 text-sm font-bold text-white shadow-lg shadow-green-500/20 hover:opacity-90 disabled:opacity-50 transition uppercase tracking-wider flex items-center justify-center gap-2"
+																			>
+																				{confirmingAttendance === request.id ? "Confirming..." : "I Have Arrived 📍"}
+																			</button>
+																		)}
+																	</div>
 																</div>
 															)}
 															{request.status === "ARRIVED" && (
@@ -783,98 +1058,227 @@ export default function PlateletsDonation() {
 							</div>
 
 							{/* Open Platelet Needs Section */}
-							<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6 mb-6">
-								<div className="flex flex-col gap-4 mb-6">
-									<div className="flex items-center justify-between">
-										<h2 className="text-lg font-semibold text-white">Open Platelet Needs</h2>
-									</div>
-									<div className="flex gap-2 p-1 bg-white/5 rounded-xl">
-										<button
-											onClick={() => setActiveTab("matches")}
-											className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "matches"
-												? "bg-red-600 text-white shadow-lg shadow-red-600/20"
-												: "text-pink-100/40 hover:text-pink-100/60"
-												}`}
-										>
-											Matches ({matchedNeeds.length})
-										</button>
-										<button
-											onClick={() => setActiveTab("all")}
-											className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "all"
-												? "bg-[#1B3C73] text-white shadow-lg shadow-[#1B3C73]/20"
-												: "text-pink-100/40 hover:text-pink-100/60"
-												}`}
-										>
-											All ({emergencyNeeds.length})
-										</button>
-									</div>
+							{/* Render Needs List */}
+							<div className="flex flex-col gap-4 mb-6">
+								<div className="flex items-center justify-between">
+									<h2 className="text-lg font-semibold text-white">Open Platelet Needs</h2>
 								</div>
-
-								{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).length ? (
-									<ul className="space-y-3">
-										{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).slice(0, 5).map((need) => {
-											const isUrgent = need.status === "URGENT"
-											return (
-												<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition group">
-													<div className="flex items-start justify-between gap-3">
-														<div className="flex-1 min-w-0">
-															<div className="flex items-center gap-2 mb-2">
-																<span className="font-bold text-white text-sm truncate">{need.title || need.need_type}</span>
-																<span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-tighter ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
-																	{need.status || "NORMAL"}
-																</span>
-															</div>
-															<div className="space-y-1">
-																<p className="text-[10px] text-pink-100/60 flex items-center gap-1">
-																	📍 {need.city}
-																</p>
-																<p className="text-[10px] text-pink-100/70 border-t border-white/5 pt-1 mt-1 font-mono">
-																	{need.contact_phone}
-																</p>
-															</div>
-														</div>
-														<Link href={`/needs/${need.id}`} legacyBehavior>
-															<a className="rounded-lg h-10 w-10 flex items-center justify-center bg-[#E91E63]/10 text-[#E91E63] hover:bg-[#E91E63] hover:text-white transition-all shadow-sm">
-																<span className="font-black text-xs">{need.required_blood_group || 'Any'}</span>
-															</a>
-														</Link>
-													</div>
-												</li>
-											)
-										})}
-									</ul>
-								) : (
-									<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70 text-center">
-										<p>No {activeTab === "matches" ? "compatible" : "active"} platelet requests found.</p>
-									</div>
-								)}
+								<div className="flex gap-2 p-1 bg-white/5 rounded-xl">
+									<button
+										onClick={() => setActiveTab("matches")}
+										className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "matches"
+											? "bg-red-600 text-white shadow-lg shadow-red-600/20"
+											: "text-pink-100/40 hover:text-pink-100/60"
+											}`}
+									>
+										Matches ({matchedNeeds.length})
+									</button>
+									<button
+										onClick={() => setActiveTab("all")}
+										className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${activeTab === "all"
+											? "bg-[#1B3C73] text-white shadow-lg shadow-[#1B3C73]/20"
+											: "text-pink-100/40 hover:text-pink-100/60"
+											}`}
+									>
+										All ({emergencyNeeds.length})
+									</button>
+								</div>
 							</div>
+
+							{/* Render Content */}
+							{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).length === 0 ? (
+								<div className="rounded-xl border border-dashed border-[#F6D6E3]/40 bg-[#1A1A2E] p-6 text-sm text-pink-100/70 text-center">
+									<p>No {activeTab === "matches" ? "compatible" : "active"} platelet requests found.</p>
+								</div>
+							) : (
+								<div className="space-y-4">
+									{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).slice(0, 50).map((need) => {
+										// Check if we already have an active request for this need
+										const existingRequest = donationRequests.find(r => {
+											if (need.isHospitalNeed) {
+												// Direct match by hospital_need ID if available
+												if (r.hospital_need?.id === need.id) return true;
+												// Fallback to hospital ID match for older/generic requests
+												return r.hospital?.id === need.hospital?.id && r.request_type === "PLATELETS" && r.status !== "COMPLETED" && r.status !== "REJECTED" && r.status !== "CANCELLED"
+											} else {
+												return (r.emergency_need?.id === need.id) || (r.emergency_need === need.id)
+											}
+										})
+
+										const isHospital = !!need.isHospitalNeed
+										const location = need.city || (isHospital ? need.hospital?.city : "")
+										const isUrgent = need.status === "URGENT"
+
+										return (
+											<div key={need.id} className="bg-slate-800/50 rounded-2xl p-5 border border-slate-700/50 hover:border-slate-600 transition flex flex-col md:flex-row gap-4 group relative overflow-hidden">
+												{/* Status Bar */}
+												<div className={`absolute top-0 left-0 w-1 h-full ${isHospital ? 'bg-purple-500' : 'bg-red-500'}`}></div>
+
+												<div className="flex-1 pl-2">
+													<div className="flex items-center gap-2 mb-2 flex-wrap">
+														<span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border shadow-sm ${isHospital ? "bg-purple-500/10 text-purple-300 border-purple-500/30" : "bg-red-500/10 text-red-300 border-red-500/30"
+															}`}>
+															{isHospital ? "🏥 Hospital Request" : "🚨 Public Emergency"}
+														</span>
+														{isUrgent && (
+															<span className="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600/20 text-red-400 border border-red-600/30 animate-pulse">
+																Urgent
+															</span>
+														)}
+														<span className="text-slate-400 text-xs flex items-center gap-1 ml-auto">
+															📍 {location}
+														</span>
+													</div>
+
+													<h3 className="font-bold text-white text-lg">{need.title || (isHospital ? `${need.need_type} Needed` : "Emergency Request")}</h3>
+													<p className="text-slate-300 text-sm mb-3 line-clamp-2">{need.description || need.patient_details || "No additional details provided."}</p>
+
+													<div className="flex flex-wrap gap-2 text-xs">
+														<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+															Blood Group: <span className="font-bold text-[#E91E63]">{need.required_blood_group || "Any"}</span>
+														</span>
+														<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+															Patient: <span className="font-bold text-white">{need.patient_name || "N/A"}</span>
+														</span>
+														{need.isHospitalNeed && need.location_details && (
+															<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+																Place: <span className="font-bold text-white">{need.location_details}</span>
+															</span>
+														)}
+														{need.isHospitalNeed && need.time_to_reach && (
+															<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+																Time: <span className="font-bold text-red-400">{need.time_to_reach}</span>
+															</span>
+														)}
+														{(need.patient_contact || need.contact_phone) && (
+															<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+																Contact: <span className="font-bold text-emerald-400">{need.patient_contact || need.contact_phone}</span>
+															</span>
+														)}
+														{need.needed_by && (
+															<span className="bg-slate-700/50 px-2.5 py-1.5 rounded text-slate-300 border border-white/5">
+																Needed By: <span className="font-bold text-white">
+																	{(() => {
+																		try {
+																			return new Date(need.needed_by).toLocaleDateString()
+																		} catch (e) {
+																			return "TBD"
+																		}
+																	})()}
+																</span>
+															</span>
+														)}
+													</div>
+												</div>
+
+												<div className="flex flex-col justify-center items-end min-w-[150px] border-t md:border-t-0 md:border-l border-white/5 pt-4 md:pt-0 md:pl-4 mt-2 md:mt-0">
+													{existingRequest ? (
+														<div className="text-center w-full">
+															<div className={`w-full px-3 py-1.5 rounded text-xs font-bold mb-3 inline-block text-center uppercase tracking-wide ${existingRequest.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+																existingRequest.status === 'ACCEPTED' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+																	['SCHEDULED', 'SCHEDULE_CONFIRMED', 'REACHING', 'ARRIVED'].includes(existingRequest.status) ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+																		'bg-white/5 text-slate-400'
+																}`}>
+																{existingRequest.status.replace('_', ' ')}
+															</div>
+
+															{existingRequest.status === 'ACCEPTED' && (
+																<p className="text-[10px] text-slate-400 mb-2 italic">Waiting for schedule...</p>
+															)}
+
+															{existingRequest.status === 'SCHEDULED' && (
+																<div className="flex flex-col gap-2 w-full">
+																	<p className="text-[10px] text-white bg-slate-700 px-2 py-1 rounded text-center">
+																		📅 {new Date(existingRequest.scheduled_date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+																	</p>
+																	<div className="flex gap-2">
+																		<button
+																			onClick={() => handleWorkflowAction(existingRequest.id, 'confirm_schedule')}
+																			disabled={updatingWorkflow === existingRequest.id}
+																			className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 rounded text-xs font-bold text-white transition shadow-lg shadow-green-900/20"
+																		>
+																			Accept
+																		</button>
+																		<button
+																			onClick={() => handleWorkflowAction(existingRequest.id, 'reject_schedule')}
+																			disabled={updatingWorkflow === existingRequest.id}
+																			className="flex-1 px-3 py-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/30 text-xs font-bold transition uppercase"
+																		>
+																			Reject Schedule
+																		</button>
+																	</div>
+																</div>
+															)}
+
+															{['SCHEDULE_CONFIRMED', 'REACHING'].includes(existingRequest.status) && (
+																<div className="space-y-2 w-full">
+																	{existingRequest.status === 'SCHEDULE_CONFIRMED' && (
+																		<button
+																			onClick={() => handleWorkflowAction(existingRequest.id, 'confirm_reaching')}
+																			disabled={updatingWorkflow === existingRequest.id}
+																			className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow-lg shadow-blue-900/20"
+																		>
+																			I'm Coming 🚗
+																		</button>
+																	)}
+																	<button
+																		onClick={() => handleConfirmAttendance(existingRequest.id)}
+																		disabled={confirmingAttendance === existingRequest.id || updatingWorkflow === existingRequest.id}
+																		className="w-full px-3 py-2 bg-[#E91E63] hover:bg-[#D81B60] rounded text-xs font-bold text-white transition shadow-lg shadow-pink-900/20"
+																	>
+																		I've Reached 📍
+																	</button>
+																</div>
+															)}
+														</div>
+													) : (
+														<button
+															onClick={() => {
+																const isEligible = healthEligible && healthReportUploaded;
+																if (!isEligible) {
+																	alert("Please complete your health assessment and upload your verified report first to verify your eligibility for platelet donation.");
+																	return;
+																}
+																handleWillingToDonate(need);
+															}}
+															disabled={updatingWorkflow === need.id}
+															className="w-full px-4 py-3 bg-white text-[#131326] hover:bg-pink-50 rounded-xl font-bold text-sm shadow-xl shadow-white/5 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group-hover:scale-105"
+														>
+															{updatingWorkflow === need.id ? (
+																<span className="h-4 w-4 border-2 border-slate-600 border-t-transparent rounded-full animate-spin"></span>
+															) : (
+																<>
+																	<span>👋 Willing to Donate</span>
+																</>
+															)}
+														</button>
+													)}
+												</div>
+											</div>
+										)
+									})}
+								</div>
+							)}
 
 							{/* Platelet Compatibility + Matched Needs */}
 							<div className="grid gap-6 md:grid-cols-2">
 								<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
 									<h2 className="text-lg font-semibold text-white">Platelet Compatibility</h2>
 									<p className="mt-2 text-sm text-pink-100/70">
-										Based on your blood group <strong>{donor?.blood_group || "Unknown"}</strong>, you can donate platelets to:
+										Based on your blood group <strong>{donor?.blood_group || "Unknown"}</strong>, you can donate platelets into:
 									</p>
-									{compatibleGroups.length > 0 ? (
-										<div className="mt-4 rounded-xl bg-[#E91E63]/10 border border-[#E91E63]/30 p-4">
-											<div className="flex flex-wrap gap-2">
-												{compatibleGroups.map(group => (
-													<span key={group} className="px-3 py-1 rounded-full bg-[#E91E63] text-white text-sm font-bold shadow-md">
-														{group}
-													</span>
-												))}
-											</div>
-											<p className="mt-3 text-xs text-pink-200/60">
-												* Only people with these blood types can receive your platelets safely.
-											</p>
+									<div className="mt-4 rounded-xl bg-[#E91E63]/10 border border-[#E91E63]/30 p-4">
+										<div className="flex flex-wrap gap-2">
+											{(donor?.blood_group ? (Object.keys(PLATELET_RECEIVE_COMPATIBILITY).filter(p_bg => PLATELET_RECEIVE_COMPATIBILITY[p_bg].includes(donor.blood_group))) : []).map(group => (
+												<span key={group} className="px-3 py-1 rounded-full bg-[#E91E63] text-white text-sm font-bold shadow-md">
+													{group}
+												</span>
+											))}
 										</div>
-									) : (
-										<div className="mt-4 text-sm text-gray-400 italic">
-											Update your blood group profile to see compatibility.
-										</div>
-									)}
+										<p className="mt-3 text-xs text-pink-200/60">
+											* Patients with these blood types can receive your platelets safely.
+										</p>
+									</div>
 									<div className="mt-6">
 										<p className="text-sm font-medium text-pink-100/80 mb-2">Compatibility Chart Reference</p>
 										<div className="rounded-xl overflow-hidden border border-[#F6D6E3]/20">

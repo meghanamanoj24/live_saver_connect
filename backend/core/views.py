@@ -40,7 +40,6 @@ from .serializers import (
     HospitalNeedSerializer,
     AppointmentSerializer,
     DeceasedDonorRequestSerializer,
-    AccidentAlertSerializer,
     BloodDonationEventSerializer,
     CustomTokenObtainPairSerializer,
     MedicalEssentialSerializer,
@@ -65,7 +64,7 @@ from .models import (
     User, UserRoles, DonorProfile, DonorCoupon, EmergencyNeed, OrganDonor, 
     MarketplaceItem, Hospital, Doctor, DoctorAvailability, Review, 
     DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, 
-    AccidentAlert, BloodDonationEvent, EventRegistration, MedicalEssential, 
+    BloodDonationEvent, EventRegistration, MedicalEssential, 
     MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, 
     PatientVisit, Staff, StaffAvailability, Attendance, SalaryPayment, 
     PerformanceTracking, EquipmentNeed, EquipmentOrder, Invoice, PDFIntegrityLedger,
@@ -73,10 +72,10 @@ from .models import (
 )
 
 
-ALL_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
+ALL_BLOOD_GROUPS = ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"]
 
 BLOOD_COMPATIBILITY = {
-	"O-": list(ALL_BLOOD_GROUPS),
+	"O-": ALL_BLOOD_GROUPS,
 	"O+": ["O+", "A+", "B+", "AB+"],
 	"A-": ["A-", "A+", "AB-", "AB+"],
 	"A+": ["A+", "AB+"],
@@ -84,6 +83,19 @@ BLOOD_COMPATIBILITY = {
 	"B+": ["B+", "AB+"],
 	"AB-": ["AB-", "AB+"],
 	"AB+": ["AB+"],
+}
+
+# Sync with utils_email logic (Receiver perspective: Who can patient receive from?)
+# Based on Image 2 Column 3
+PLATELET_COMPATIBILITY = {
+	"O-": ["O-", "O+"],
+	"O+": ["O-", "O+"],
+	"A-": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"A+": ["A-", "A+", "O-", "O+", "AB-", "AB+"],
+	"B-": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"B+": ["B-", "B+", "O-", "O+", "AB-", "AB+"],
+	"AB-": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+	"AB+": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
 }
 
 
@@ -112,7 +124,7 @@ class MetricsOverviewView(APIView):
         module_breakdown = {
             "donor": donors_count + DonationRequest.objects.count(),
             "hospital": hospitals_count + HospitalNeed.objects.count() + Appointment.objects.count(),
-            "organ": OrganDonor.objects.count() + DeceasedDonorRequest.objects.count() + AccidentAlert.objects.count(),
+            "organ": OrganDonor.objects.count() + DeceasedDonorRequest.objects.count(),
             "marketplace": items_listed + MedicalOrder.objects.count(),
         }
 
@@ -481,9 +493,20 @@ class DonorProfileViewSet(viewsets.ModelViewSet):
 
 		# Comparison
 		if uploaded_hash == ledger_entry.pdf_hash:
+			# --- Freshness Check ---
+			# Check if there's a more recent donation request (post-dating this report)
+			from .models import DonationRequest
+			latest_request = DonationRequest.objects.filter(donor=request.user).order_by('-created_at').first()
+			
+			if latest_request and latest_request.created_at > ledger_entry.created_at:
+				return Response({
+					"valid": False,
+					"detail": "This report is from a previous donation cycle and has expired. Please perform a new health assessment and upload the fresh report."
+				}, status=status.HTTP_400_BAD_REQUEST)
+
 			return Response({
 				"valid": True,
-				"detail": "Integrity verified! This is the authentic report.",
+				"detail": "Integrity verified! This is the authentic fresh report.",
 				"download_id": ledger_entry.download_id
 			})
 		else:
@@ -507,6 +530,32 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 	serializer_class = EmergencyNeedSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+	def get_queryset(self):
+		queryset = super().get_queryset()
+		user = self.request.user
+		
+		# Allow filtering by 'my_requests'
+		my_requests = self.request.query_params.get("my_requests")
+		if my_requests == "true" and user.is_authenticated:
+			queryset = queryset.filter(created_by=user)
+
+		# Filter by status
+		status_filter = self.request.query_params.get("status")
+		if status_filter:
+			queryset = queryset.filter(status=status_filter)
+
+		# Filter by need_type
+		need_type = self.request.query_params.get("need_type")
+		if need_type:
+			queryset = queryset.filter(need_type=need_type)
+
+		# Filter by city
+		city = self.request.query_params.get("city")
+		if city:
+			queryset = queryset.filter(city__icontains=city)
+			
+		return queryset
+
 	@action(detail=False, methods=["get"], permission_classes=[permissions.AllowAny])
 	def donor_count(self, request):
 		blood_group = request.query_params.get("blood_group")
@@ -529,21 +578,9 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 			
 		from .utils_email import BLOOD_RECEIVE_COMPATIBILITY, PLATELET_RECEIVE_COMPATIBILITY
 		
-		# Who can GIVE to this patient blood group? 
-		# Wait, the donor IS the one giving. 
-		# So we need to find needs where the donor can help.
-		
-		# A donor with group 'D' can help a patient with group 'P' 
-		# if 'D' is in P's compatibility list.
-		
-		# This is slow if we iterate all needs. 
-		# Let's find all patient groups that can receive from this donor.
-		
-		def get_receivable_groups(donor_group, compatibility_map):
-			return [p_group for p_group, donors in compatibility_map.items() if donor_group in donors]
-
-		receivable_blood = get_receivable_groups(blood_group, BLOOD_RECEIVE_COMPATIBILITY)
-		receivable_platelets = get_receivable_groups(blood_group, PLATELET_RECEIVE_COMPATIBILITY)
+		# Find all patient groups that can receive from THIS donor's group
+		receivable_blood = [p_group for p_group, donors in BLOOD_RECEIVE_COMPATIBILITY.items() if blood_group in donors]
+		receivable_platelets = [p_group for p_group, donors in PLATELET_RECEIVE_COMPATIBILITY.items() if blood_group in donors]
 		
 		q_filter = Q(need_type="BLOOD", required_blood_group__in=receivable_blood) | \
 				   Q(need_type="PLATELETS", required_blood_group__in=receivable_platelets) | \
@@ -556,6 +593,7 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 			
 		serializer = self.get_serializer(matches.order_by("-created_at"), many=True)
 		return Response(serializer.data)
+
 
 	@action(detail=False, methods=["post"], permission_classes=[permissions.AllowAny])
 	def critical_emergency(self, request):
@@ -664,6 +702,22 @@ class EmergencyNeedViewSet(viewsets.ModelViewSet):
 		return Response({
 			"message": "You have successfully accepted this emergency request. Please contact the patient immediately.",
 			"need": self.get_serializer(need).data
+		})
+
+
+	@action(detail=True, methods=["post"], url_path="mark_recovered", permission_classes=[permissions.IsAuthenticated])
+	def mark_fulfilled(self, request, pk=None):
+		"""Allow the creator to mark the need as FULFILLED (Recovered)"""
+		need = self.get_object()
+		if need.created_by != request.user:
+			return Response({"error": "Only the creator can mark this as recovered."}, status=status.HTTP_403_FORBIDDEN)
+		
+		need.status = "FULFILLED"
+		need.save()
+		
+		return Response({
+			"message": "Status updated to Recovered (Fulfilled).",
+			"status": need.status
 		})
 
 
@@ -1155,18 +1209,24 @@ class HospitalViewSet(viewsets.ModelViewSet):
 	def me(self, request):
 		"""Get hospital profile for logged-in hospital user"""
 		user = request.user
-		hospital = getattr(user, "hospital_profile", None)
+		# Use explicit filter for better reliability
+		hospital = Hospital.objects.filter(user=user).first()
 		
 		# Fallback: if no direct profile link, but user is a hospital role,
 		# try to find a hospital where this user's email might be listed or if it's the only one
 		if not hospital and user.role == "hospital":
 			# Try to find by direct email match in hospital records
 			hospital = Hospital.objects.filter(email=user.email).first()
-			if not hospital:
+			if not hospital and user.phone:
 				# Heuristic: find by phone if available
-				hospital = Hospital.objects.filter(phone=user.phone).first() if user.phone else None
+				hospital = Hospital.objects.filter(phone=user.phone).first()
 		
 		if hospital:
+			# Ensure the link is established for next time if it wasn't
+			if not hospital.user:
+				hospital.user = user
+				hospital.save()
+				
 			serializer = self.get_serializer(hospital)
 			return Response(serializer.data)
 		return Response({"detail": "Hospital profile not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1208,6 +1268,13 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		health_report = None
 		health_status = "Verified via Blockchain Ledger"
 		
+		# Get hospital_need if provided and link the hospital automatically
+		hospital_need = serializer.validated_data.get('hospital_need')
+		hospital = serializer.validated_data.get('hospital')
+		
+		if hospital_need and not hospital:
+			hospital = hospital_need.hospital
+
 		if user.is_authenticated:
 			profile = getattr(user, 'donor_profile', None)
 			if profile and profile.latest_report_id:
@@ -1225,6 +1292,7 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		
 		serializer.save(
 			donor=user if user.is_authenticated else None,
+			hospital=hospital,
 			health_report=health_report,
 			health_status=health_status
 		)
@@ -1233,25 +1301,44 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		queryset = super().get_queryset()
 		user = self.request.user
 		
-		if not user.is_authenticated:
-			return DonationRequest.objects.none()
+		# Optimization: select_related handled at class level
 		
-		# If it's a donor, they should only see their own requests
-		if user.role == "donor":
-			queryset = queryset.filter(donor=user)
-		# If it's a hospital, they should only see requests for their hospital
-		elif user.role == "hospital":
-			hospital = getattr(user, 'hospital_profile', None)
-			if hospital:
-				queryset = queryset.filter(hospital=hospital)
-			else:
-				# If user is hospital role but has no profile, return none
-				return DonationRequest.objects.none()
+		# Only allow access to:
+		# 1. Requests made BY the user (as donor)
+		# 2. Requests made TO a hospital the user manages
+		# 3. Requests made TO an emergency need the user created
+		
+		from django.db.models import Q
+		
+		if not user.is_authenticated:
+			return queryset.none()
+			
+		filter_condition = Q(donor=user)
+		
+		# If user manages hospitals
+		hospitals = Hospital.objects.filter(user=user)
+		hospital_ids = list(hospitals.values_list('id', flat=True))
+		
+		if hospital_ids:
+			filter_condition |= Q(hospital_id__in=hospital_ids)
+			# Also include requests for needs posted by these hospitals
+			filter_condition |= Q(hospital_need__hospital_id__in=hospital_ids)
+			
+		# If user has created emergency needs
+		filter_condition |= Q(emergency_need__created_by=user)
+		
+		print(f"DEBUG: get_queryset for user {user.id} ({user.role}) | hospitals: {hospital_ids}")
+		
+		queryset = queryset.filter(filter_condition).distinct()
 
 		# Optional additional filters via query params
 		hospital_id = self.request.query_params.get("hospital")
 		if hospital_id:
 			queryset = queryset.filter(hospital_id=hospital_id)
+			
+		emergency_need_id = self.request.query_params.get("emergency_need")
+		if emergency_need_id:
+			queryset = queryset.filter(emergency_need_id=emergency_need_id)
 		
 		request_type = self.request.query_params.get("request_type")
 		if request_type:
@@ -1264,6 +1351,27 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		request_obj = self.get_object()
 		if request_obj.status != "PENDING":
 			return Response({"detail": "Only pending requests can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
+			
+		# Permission Check: Hospital Owner OR Emergency Need Owner
+		# Use explicit ID comparison and handle indirect linkage through hospital_need
+		is_hospital_owner = False
+		actual_hospital = request_obj.hospital
+		if not actual_hospital and request_obj.hospital_need:
+			actual_hospital = request_obj.hospital_need.hospital
+			
+		if actual_hospital:
+			is_hospital_owner = actual_hospital.user == request.user or actual_hospital.user_id == request.user.id
+			
+		is_emergency_owner = False
+		if request_obj.emergency_need:
+			is_emergency_owner = request_obj.emergency_need.created_by == request.user or request_obj.emergency_need.created_by_id == request.user.id
+		
+		# Extra debug logging
+		if not (is_hospital_owner or is_emergency_owner):
+			print(f"DEBUG: Permission Denied for request {request_obj.id}")
+			print(f"DEBUG: user_id={request.user.id}, hospital_id={actual_hospital.id if actual_hospital else 'None'}, hospital_owner_id={actual_hospital.user_id if actual_hospital else 'N/A'}")
+			return Response({"detail": "You do not have permission to accept this response. Only the poster of the need can accept it."}, status=status.HTTP_403_FORBIDDEN)
+			
 		request_obj.status = "ACCEPTED"
 		request_obj.notes = request.data.get("notes", "")
 		
@@ -1279,30 +1387,30 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			
 		request_obj.save()
 		
-		# AUTOMATED CLEANUP: When a donor is accepted, find and delete the matching HospitalNeed 
-		# (as it is now being fulfilled by this donor)
-		from .models import HospitalNeed
-		matching_needs = HospitalNeed.objects.filter(
-			hospital=request_obj.hospital,
-			need_type=request_obj.request_type,
-			status__in=["NORMAL", "URGENT"]
-		)
-		
-		# If we have patient name, use it to narrow down
-		if request_obj.patient_name:
-			exact_need = matching_needs.filter(patient_name__icontains=request_obj.patient_name).first()
-			if exact_need:
-				exact_need.delete()
+		# AUTOMATED CLEANUP: When a donor is accepted
+		if request_obj.hospital:
+			# Hospital Logic (existing)
+			from .models import HospitalNeed
+			matching_needs = HospitalNeed.objects.filter(
+				hospital=request_obj.hospital,
+				need_type=request_obj.request_type,
+				status__in=["NORMAL", "URGENT"]
+			)
+			if request_obj.patient_name:
+				exact_need = matching_needs.filter(patient_name__icontains=request_obj.patient_name).first()
+				if exact_need: exact_need.delete()
+				else: 
+					top = matching_needs.first()
+					if top: top.delete()
 			else:
-				# If no exact name match, delete the most relevant one of that type
-				top_need = matching_needs.first()
-				if top_need:
-					top_need.delete()
-		else:
-			# Just delete the most recent urgent need of this type for this hospital
-			top_need = matching_needs.first()
-			if top_need:
-				top_need.delete()
+				top = matching_needs.first()
+				if top: top.delete()
+
+		elif request_obj.emergency_need:
+			# Emergency Need Logic
+			# Set the accepted_by field on the EmergencyNeed to the donor
+			request_obj.emergency_need.accepted_by = request_obj.donor
+			request_obj.emergency_need.save()
 
 		# Correctly invalidate the report ID on the donor PROFILE
 		if request_obj.donor and hasattr(request_obj.donor, 'donor_profile'):
@@ -1318,17 +1426,24 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 		if request_obj.status != "PENDING":
 			return Response({"detail": "Only pending requests can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
 		
-		# AUTOMATED CLEANUP: Delete the matching HospitalNeed if rejecting a response
-		from .models import HospitalNeed
-		matching_needs = HospitalNeed.objects.filter(
-			hospital=request_obj.hospital,
-			need_type=request_obj.request_type
-		)
-		if request_obj.patient_name:
-			matching_needs = matching_needs.filter(patient_name__icontains=request_obj.patient_name)
+		# Permission Check
+		is_hospital_owner = request_obj.hospital and request_obj.hospital.user == request.user
+		is_emergency_owner = request_obj.emergency_need and request_obj.emergency_need.created_by == request.user
 		
-		# Delete the need associated with this request rejection (as requested: "delete urgent blood request")
-		matching_needs.delete()
+		if not (is_hospital_owner or is_emergency_owner):
+			return Response({"detail": "You do not have permission to reject this request."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# AUTOMATED CLEANUP: Delete the matching HospitalNeed if rejecting a response
+		if request_obj.hospital:
+			from .models import HospitalNeed
+			matching_needs = HospitalNeed.objects.filter(
+				hospital=request_obj.hospital,
+				need_type=request_obj.request_type
+			)
+			if request_obj.patient_name:
+				matching_needs = matching_needs.filter(patient_name__icontains=request_obj.patient_name)
+			
+			matching_needs.delete()
 		
 		# Correctly invalidate the report ID on the donor PROFILE before deleting the request
 		if request_obj.donor and hasattr(request_obj.donor, 'donor_profile'):
@@ -1337,16 +1452,114 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			profile.save()
 		
 		# AUTOMATED CLEANUP: Delete the DonationRequest immediately as requested
-		donor_id = request_obj.donor_id
 		request_obj.delete()
 			
 		return Response({"detail": "Request rejected and cleaned up successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+	def destroy(self, request, *args, **kwargs):
+		"""Allow donor to delete their own pending/rejected requests"""
+		instance = self.get_object()
+		
+		# Permission Check: Only the donor who made the request can delete it
+		if instance.donor != request.user:
+			return Response({"detail": "You do not have permission to delete this request."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# Cleanup EmergencyNeed if this was the accepted donor
+		if instance.emergency_need and instance.emergency_need.accepted_by == instance.donor:
+			instance.emergency_need.accepted_by = None
+			instance.emergency_need.save()
+		
+		# Allow deletion but handle consequences (simply delete the record)
+		self.perform_destroy(instance)
+		return Response(status=status.HTTP_204_NO_CONTENT)
 	
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-	def confirm_arrival(self, request, pk=None):
+	def set_schedule(self, request, pk=None):
+		"""Hospital or Emergency Owner sets a schedule for the donor."""
 		request_obj = self.get_object()
-		if request_obj.status != "ACCEPTED":
-			return Response({"detail": "Only accepted requests can be confirmed for arrival."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		is_hospital_owner = request_obj.hospital and request_obj.hospital.user == request.user
+		is_emergency_owner = request_obj.emergency_need and request_obj.emergency_need.created_by == request.user
+		
+		if not (is_hospital_owner or is_emergency_owner):
+			return Response({"detail": "Only the creator/hospital of the request can set a schedule."}, status=status.HTTP_403_FORBIDDEN)
+		
+		# Allow setting schedule if status is ACCEPTED
+		if request_obj.status not in ["ACCEPTED", "SCHEDULED"]:
+			return Response({"detail": "Only accepted requests can have a schedule set."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		scheduled_date = request.data.get("scheduled_date")
+		if not scheduled_date:
+			return Response({"detail": "scheduled_date is required."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		request_obj.scheduled_date = scheduled_date
+		request_obj.status = "SCHEDULED"
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_schedule(self, request, pk=None):
+		"""Donor confirms the schedule set by the hospital."""
+		request_obj = self.get_object()
+		if request_obj.donor != request.user:
+			return Response({"detail": "Only the donor can confirm the schedule."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if request_obj.status != "SCHEDULED":
+			return Response({"detail": "No schedule to confirm."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		request_obj.status = "SCHEDULE_CONFIRMED"
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def reject_schedule(self, request, pk=None):
+		"""Donor rejects the schedule set by the hospital."""
+		request_obj = self.get_object()
+		if request_obj.donor != request.user:
+			return Response({"detail": "Only the donor can reject the schedule."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if request_obj.status != "SCHEDULED":
+			return Response({"detail": "Request is not in a scheduled state."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# Move back to ACCEPTED so hospital can set a new schedule
+		request_obj.status = "ACCEPTED"
+		request_obj.scheduled_date = None
+		request_obj.notes = f"Donor rejected previous schedule: {request.data.get('notes', 'No reason provided')}"
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_reaching(self, request, pk=None):
+		"""Donor marks themselves as reaching the hospital."""
+		request_obj = self.get_object()
+		if request_obj.donor != request.user:
+			return Response({"detail": "Only the donor can mark as reaching."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if request_obj.status != "SCHEDULE_CONFIRMED":
+			return Response({"detail": "Must confirm schedule before marking as reaching."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		request_obj.status = "REACHING"
+		request_obj.save()
+		return Response(self.get_serializer(request_obj).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_arrival(self, request, pk=None):
+		"""Donor or Hospital/Owner marks arrival."""
+		request_obj = self.get_object()
+		# Allow both donor and hospital/owner to confirm arrival
+		is_hospital_owner = request_obj.hospital and request_obj.hospital.user == request.user
+		is_emergency_owner = request_obj.emergency_need and request_obj.emergency_need.created_by == request.user
+		is_donor = request_obj.donor == request.user
+		
+		if not (is_hospital_owner or is_emergency_owner or is_donor):
+			return Response({"detail": "Only donor or creator can confirm arrival."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if request_obj.status == "ARRIVED":
+			return Response(self.get_serializer(request_obj).data, status=status.HTTP_200_OK)
+
+		if request_obj.status not in ["SCHEDULE_CONFIRMED", "REACHING", "ACCEPTED"]:
+			return Response({"detail": "Cannot confirm arrival for this request status."}, status=status.HTTP_400_BAD_REQUEST)
+				
 		request_obj.status = "ARRIVED"
 		request_obj.confirmed_arrival_at = timezone.now()
 		request_obj.save()
@@ -1359,12 +1572,21 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			return Response({"detail": "Only arrived donors can have their arrival status revoked."}, status=status.HTTP_400_BAD_REQUEST)
 		request_obj.status = "ACCEPTED"
 		request_obj.confirmed_arrival_at = None
+		request_obj.notes = request.data.get("notes", "Arrival registration rejected by staff.")
 		request_obj.save()
 		return Response(self.get_serializer(request_obj).data)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def hospital_verify(self, request, pk=None):
+		"""Verify donation and award points/stars."""
 		request_obj = self.get_object()
+		
+		is_hospital_owner = request_obj.hospital and request_obj.hospital.user == request.user
+		is_emergency_owner = request_obj.emergency_need and request_obj.emergency_need.created_by == request.user
+		
+		if not (is_hospital_owner or is_emergency_owner):
+			return Response({"detail": "Only the creator of the request can verify the donation."}, status=status.HTTP_403_FORBIDDEN)
+
 		if request_obj.status != "ARRIVED":
 			return Response({"detail": "Only donors who have confirmed arrival can be verified."}, status=status.HTTP_400_BAD_REQUEST)
 		
@@ -1373,80 +1595,72 @@ class DonationRequestViewSet(viewsets.ModelViewSet):
 			request_obj.notes = request.data.get("notes", request_obj.notes)
 			request_obj.save()
 
-			# Create PatientVisit record
-			from .models import PatientVisit
-			visit_date = request.data.get("visit_date") or timezone.now()
-			
-			purpose = "BLOOD_DONATION"
-			if request_obj.request_type == "PLATELETS":
-				purpose = "PLATELET_DONATION"
-			elif request_obj.request_type == "ORGAN":
-				purpose = "ORGAN_DONATION"
-
-			PatientVisit.objects.create(
-				patient=request_obj.donor,
-				hospital=request_obj.hospital,
-				visit_purpose=purpose,
-				visit_date=visit_date,
-				notes=request.data.get("notes", ""),
-				rewards=request.data.get("rewards", ""),
-				fruity_given=request.data.get("fruity_given", False),
-				star_reward=request.data.get("star_reward", True)  # User mentioned a star reward for each donation
-			)
-
-			# Update DonorProfile last_donated_on
-			dt = datetime.fromisoformat(visit_date.replace("Z", ""))
-			formatted_date = dt.strftime("%Y-%m-%d")
-
-			# Update DonorProfile last_donated_on and rewards
-			from .models import DonorProfile, DonorCoupon
-			import secrets
-			
-			profile, _ = DonorProfile.objects.get_or_create(user=request_obj.donor)
-			profile.last_donated_on = formatted_date
-			
-			# Increment stars (cumulative)
-			profile.current_stars += 1
-			
-			# Check for 50 star milestone (recurring Every 50 stars)
-			if profile.current_stars > 0 and profile.current_stars % 50 == 0:
-				# Award Rs 50
-				from decimal import Decimal
-				profile.total_money_earned += Decimal("50.00")
+			# Create PatientVisit record (Only for Hospitals)
+			if request_obj.hospital:
+				from .models import PatientVisit
+				visit_date = request.data.get("visit_date") or timezone.now()
 				
-				# Generate 20% Discount Coupon
-				coupon_code = f"LS-{secrets.token_hex(4).upper()}"
-				DonorCoupon.objects.create(
-					donor=request_obj.donor,
-					code=coupon_code,
-					discount_percentage=20
+				purpose = "BLOOD_DONATION"
+				if request_obj.request_type == "PLATELETS": purpose = "APHERESIS"
+				elif request_obj.request_type == "ORGAN": purpose = "ORGAN_DONATION"
+				
+				PatientVisit.objects.create(
+					hospital=request_obj.hospital,
+					doctor=None,
+					patient=request_obj.donor,
+					visit_date=visit_date,
+					visit_purpose=purpose,
+					notes=f"Verified donation from {request_obj.donor.username}"
 				)
+			elif request_obj.emergency_need:
+				# Mark emergency need as fulfilled
+				request_obj.emergency_need.status = "FULFILLED"
+				request_obj.emergency_need.save()
+
+			# Award Stars / Money / Coupons
+			donor = request_obj.donor
+			if donor and hasattr(donor, 'donor_profile'):
+				from .models import DonorProfile, DonorCoupon
+				import secrets
 				
-			profile.save()
+				profile = donor.donor_profile
+				
+				# Update dononated date
+				dt = timezone.now()
+				formatted_date = dt.strftime("%Y-%m-%d")
+				profile.last_donated_on = formatted_date
+				
+				# Increment stars
+				profile.current_stars += 10 # 10 stars per donation
+				
+				# Check for 50 star milestone (recurring Every 50 stars)
+				if profile.current_stars > 0 and profile.current_stars % 50 == 0:
+					# Award Rs 50
+					from decimal import Decimal
+					profile.total_money_earned += Decimal("50.00")
+					
+					# Generate 20% Discount Coupon
+					coupon_code = f"LS-{secrets.token_hex(4).upper()}"
+					DonorCoupon.objects.create(
+						donor=request_obj.donor,
+						code=coupon_code,
+						discount_percentage=20
+					)
+					
+				profile.save()
 
 			# AUTOMATED CLEANUP: Delete the DonationRequest after it is COMPLETED and recorded
-			# We already saved everything to PatientVisit and DonorProfile
 			request_obj.delete()
 
 		return Response({"detail": "Donation verified and record cleaned up."}, status=status.HTTP_200_OK)
 
-	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-	def reject_arrival(self, request, pk=None):
-		request_obj = self.get_object()
-		if request_obj.status != "ARRIVED":
-			return Response({"detail": "Only arrived donors can have their arrival rejected."}, status=status.HTTP_400_BAD_REQUEST)
-		
-		# Set back to ACCEPTED so they can try to 'arrive' again if it was a mistake
-		request_obj.status = "ACCEPTED"
-		request_obj.notes = request.data.get("notes", "Arrival registration rejected by hospital staff.")
-		request_obj.save()
-		return Response(self.get_serializer(request_obj).data)
 
 
 class HospitalNeedViewSet(viewsets.ModelViewSet):
 	queryset = HospitalNeed.objects.select_related("hospital").all().order_by("-created_at")
 	serializer_class = HospitalNeedSerializer
 	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+	parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
 
 	def get_queryset(self):
 		queryset = super().get_queryset()
@@ -1466,21 +1680,41 @@ class HospitalNeedViewSet(viewsets.ModelViewSet):
 		status_filter = self.request.query_params.get("status")
 		if status_filter:
 			queryset = queryset.filter(status=status_filter)
-		# Filter by blood group compatibility for donors
+		# Filter by blood/platelet group compatibility for donors
 		donor_blood_group = self.request.query_params.get("donor_blood_group")
-		if donor_blood_group and donor_blood_group in ALL_BLOOD_GROUPS:
-			compatible_groups = BLOOD_COMPATIBILITY.get(donor_blood_group, [])
-			if compatible_groups:
-				queryset = queryset.filter(
-					Q(required_blood_group__in=compatible_groups) |
-					Q(required_blood_group__isnull=True) |
-					Q(required_blood_group__exact="")
-				)
+		if donor_blood_group:
+			if need_type == "PLATELETS":
+				# Find all patient groups receivable from this donor
+				compatible_groups = [p for p, d in PLATELET_COMPATIBILITY.items() if donor_blood_group in d]
+				if compatible_groups:
+					queryset = queryset.filter(
+						Q(required_blood_group__in=compatible_groups) |
+						Q(required_blood_group__isnull=True) |
+						Q(required_blood_group__exact="")
+					)
+			elif donor_blood_group in BLOOD_COMPATIBILITY:
+				# Find all patient groups receivable from this donor
+				compatible_groups = [p for p, d in BLOOD_COMPATIBILITY.items() if donor_blood_group in d]
+				if compatible_groups:
+					queryset = queryset.filter(
+						Q(required_blood_group__in=compatible_groups) |
+						Q(required_blood_group__isnull=True) |
+						Q(required_blood_group__exact="")
+					)
 		# Filter active needs (not fulfilled or cancelled)
 		active_only = self.request.query_params.get("active_only")
 		if active_only and active_only.lower() == "true":
 			queryset = queryset.exclude(status__in=["FULFILLED", "CANCELLED"])
 		return queryset
+
+	def perform_create(self, serializer):
+		hospital_need = serializer.save()
+		
+		# Trigger email alerts to matching donors from the hospital's registered email
+		from .utils_email import send_hospital_need_alert_email
+		# Use hospital's public email if available, otherwise fallback to user email
+		from_email = hospital_need.hospital.email if hospital_need.hospital.email else self.request.user.email
+		send_hospital_need_alert_email(hospital_need, from_email)
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
@@ -1757,7 +1991,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 			profile.last_donated_on = formatted_date
 			profile.current_stars += 1
 			
-			if profile.current_stars > 0 and profile.current_stars % 50 == 0:
+			if profile.current_stars > 0 and profile.current_stars % 3 == 0:
 				from decimal import Decimal
 				profile.total_money_earned += Decimal("50.00")
 				coupon_code = f"LS-{secrets.token_hex(4).upper()}"
@@ -1815,126 +2049,6 @@ class DeceasedDonorRequestViewSet(viewsets.ModelViewSet):
 		return queryset
 
 
-class AccidentAlertViewSet(viewsets.ModelViewSet):
-	queryset = AccidentAlert.objects.select_related("hospital_referred").all().order_by("-created_at")
-	serializer_class = AccidentAlertSerializer
-	permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
-	def get_queryset(self):
-		queryset = super().get_queryset()
-		# Filter by status (default to active)
-		status_filter = self.request.query_params.get("status", "ACTIVE")
-		queryset = queryset.filter(status=status_filter)
-		# Filter by city
-		city = self.request.query_params.get("city")
-		if city:
-			queryset = queryset.filter(city__icontains=city)
-		# Location-based search
-		lat = self.request.query_params.get("latitude")
-		lng = self.request.query_params.get("longitude")
-		if lat and lng:
-			try:
-				lat = float(lat)
-				lng = float(lng)
-				queryset = queryset.filter(latitude__isnull=False, longitude__isnull=False)
-				queryset = queryset.extra(
-					select={
-						'distance': 'SQRT(POW(69.1 * (latitude - %s), 2) + POW(69.1 * (longitude - %s) * COS(latitude / 57.3), 2))'
-					},
-					select_params=[lat, lng],
-					order_by=['distance']
-				)
-			except (ValueError, TypeError):
-				pass
-		return queryset
-
-	@action(detail=True, methods=["post"], permission_classes=[permissions.AllowAny])
-	def speed_up(self, request, pk=None):
-		"""Speed up emergency response: find nearest hospital, send alerts, and trigger ambulance call"""
-		accident = self.get_object()
-		
-		# Find nearest hospital if location is available
-		nearest_hospital = None
-		if accident.latitude and accident.longitude:
-			try:
-				hospitals = Hospital.objects.filter(
-					latitude__isnull=False,
-					longitude__isnull=False
-				).extra(
-					select={
-						'distance': 'SQRT(POW(69.1 * (latitude - %s), 2) + POW(69.1 * (longitude - %s) * COS(latitude / 57.3), 2))'
-					},
-					select_params=[float(accident.latitude), float(accident.longitude)],
-					order_by=['distance']
-				)[:1]
-				
-				if hospitals:
-					nearest_hospital = hospitals[0]
-					accident.hospital_referred = nearest_hospital
-					accident.save()
-			except (ValueError, TypeError):
-				pass
-		
-		# If no hospital found by location, try by city
-		if not nearest_hospital and accident.city:
-			try:
-				nearest_hospital = Hospital.objects.filter(city__icontains=accident.city).first()
-				if nearest_hospital:
-					accident.hospital_referred = nearest_hospital
-					accident.save()
-			except Exception:
-				pass
-		
-		# Prepare response with ambulance and hospital info
-		response_data = {
-			"message": "Emergency alert sent! Ambulance and hospital have been notified.",
-			"ambulance_contact": "108",
-			"accident": self.get_serializer(accident).data,
-		}
-		
-		if nearest_hospital:
-			response_data["nearest_hospital"] = {
-				"id": nearest_hospital.id,
-				"name": nearest_hospital.name,
-				"phone": nearest_hospital.phone,
-				"address": nearest_hospital.address,
-				"city": nearest_hospital.city,
-			}
-			response_data["message"] += f" Nearest hospital ({nearest_hospital.name}) has been alerted."
-		else:
-			response_data["nearest_hospital"] = None
-			response_data["message"] += " Please contact local hospitals directly."
-		
-		return Response(response_data, status=status.HTTP_200_OK)
-
-	@action(detail=False, methods=["get"], permission_classes=[permissions.AllowAny])
-	def accident_prone_areas(self, request):
-		"""Get accident-prone areas based on historical accident data"""
-		# Get all active accidents with coordinates
-		accidents = AccidentAlert.objects.filter(
-			status="ACTIVE",
-			latitude__isnull=False,
-			longitude__isnull=False
-		).values("id", "title", "location", "city", "latitude", "longitude", "severity", "created_at")
-		
-		# Group by area (simple clustering by proximity)
-		accident_areas = []
-		for accident in accidents:
-			accident_areas.append({
-				"id": accident["id"],
-				"title": accident["title"],
-				"location": accident["location"],
-				"city": accident["city"],
-				"latitude": float(accident["latitude"]),
-				"longitude": float(accident["longitude"]),
-				"severity": accident["severity"],
-				"reported_at": accident["created_at"].isoformat() if accident["created_at"] else None,
-			})
-		
-		return Response({
-			"accident_prone_areas": accident_areas,
-			"count": len(accident_areas),
-		})
 
 
 class BloodDonationEventViewSet(viewsets.ModelViewSet):
@@ -2039,21 +2153,47 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
 		return Response(self.get_serializer(registration).data)
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_coming(self, request, pk=None):
+		"""Donor confirms they are coming after approval"""
+		registration = self.get_object()
+		if registration.donor != request.user:
+			return Response({"detail": "You are not authorized to confirm attendance for this registration."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if registration.status != "APPROVED":
+			return Response({"detail": "Can only confirm attendance for approved registrations."}, status=status.HTTP_400_BAD_REQUEST)
+
+		registration.status = "COMING"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def donor_cancel(self, request, pk=None):
+		"""Donor cancels their own registration"""
+		registration = self.get_object()
+		if registration.donor != request.user:
+			return Response({"detail": "You are not authorized to cancel this registration."}, status=status.HTTP_403_FORBIDDEN)
+
+		if registration.status not in ["PENDING", "APPROVED", "COMING"]:
+			return Response({"detail": "Cannot cancel registration in its current state."}, status=status.HTTP_400_BAD_REQUEST)
+
+		registration.status = "NOT_COMING"
+		registration.save()
+		return Response(self.get_serializer(registration).data)
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def reject(self, request, pk=None):
 		"""Hospital rejects a pending registration"""
 		registration = self.get_object()
 		
-		# Check authorization
+		# Check authorization (Hospital owner or managed hospital)
 		is_authorized = False
 		if registration.event.hospital.user == request.user:
 			is_authorized = True
 		if not is_authorized:
-			try:
-				hospital = Hospital.objects.get(user=request.user)
-				if registration.event.hospital == hospital:
-					is_authorized = True
-			except Hospital.DoesNotExist:
-				pass
+			# Check if user has an associated hospital profile that matches
+			hospitals = Hospital.objects.filter(user=request.user)
+			if hospitals.filter(id=registration.event.hospital_id).exists():
+				is_authorized = True
 
 		if not is_authorized:
 			return Response({"detail": "You are not authorized to reject this registration."}, status=status.HTTP_403_FORBIDDEN)
@@ -2061,15 +2201,7 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
 		if registration.status != "PENDING":
 			return Response({"detail": "Can only reject pending registrations."}, status=status.HTTP_400_BAD_REQUEST)
 
-		registration = self.get_object()
-		# Only the registered donor can cancel
-		if registration.donor != request.user:
-			return Response({"detail": "You are not authorized to cancel this registration."}, status=status.HTTP_403_FORBIDDEN)
-
-		if registration.status not in ["PENDING", "APPROVED", "COMING"]:
-			return Response({"detail": "Cannot cancel a registration in its current state."}, status=status.HTTP_400_BAD_REQUEST)
-
-		registration.status = "NOT_COMING"
+		registration.status = "REJECTED"
 		registration.save()
 		return Response(self.get_serializer(registration).data)
 
@@ -2231,16 +2363,37 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 
 	@action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated], url_path="create-order")
 	def create_order(self, request):
-		"""Create an order with items"""
-		data = request.data.copy()
-		data["user_id"] = request.user.pk
+		"""Create an order with items — bulletproof JSON parsing"""
+		import json as json_mod
 
-		# Validate items
-		items_data = data.get("items", [])
-		if not items_data:
-			return Response({"detail": "Order must contain at least one item."}, status=status.HTTP_400_BAD_REQUEST)
+		# ── 1. Parse the raw JSON body directly to avoid QueryDict issues ──
+		try:
+			body = json_mod.loads(request.body)
+		except Exception:
+			body = {}
+		
+		# Fallback: also try request.data (works when DRF parses correctly)
+		if not body:
+			body = request.data if isinstance(request.data, dict) else {}
+		
+		print("=" * 60)
+		print("DEBUG create_order CALLED")
+		print("  content_type:", request.content_type)
+		print("  body type:", type(body))
+		print("  body keys:", list(body.keys()) if isinstance(body, dict) else "NOT A DICT")
+		print("  items:", body.get("items", "MISSING"))
+		print("  raw body length:", len(request.body) if hasattr(request, 'body') else "N/A")
+		print("=" * 60)
 
-		# Calculate total
+		# ── 2. Validate items ──
+		items_data = body.get("items", [])
+		if not items_data or not isinstance(items_data, list):
+			return Response(
+				{"detail": "Order must contain at least one item.", "debug_keys": list(body.keys()) if isinstance(body, dict) else []}, 
+				status=status.HTTP_400_BAD_REQUEST
+			)
+
+		# ── 3. Process each item: look up product, calculate pricing ──
 		total_amount = 0
 		order_items = []
 
@@ -2261,10 +2414,11 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 						"store_product": product,
 						"quantity": quantity,
 						"unit_price": unit_price,
-						"subtotal": subtotal
+						"subtotal": subtotal,
+						"item_name": product.name
 					})
 				except MedicalStoreProduct.DoesNotExist:
-					return Response({"detail": "Store product not found."}, status=status.HTTP_404_NOT_FOUND)
+					return Response({"detail": f"Store product not found (id={item_data.get('store_product_id')})."}, status=status.HTTP_404_NOT_FOUND)
 
 			elif product_type == "EQUIPMENT":
 				try:
@@ -2279,79 +2433,146 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 						"equipment": equipment,
 						"quantity": quantity,
 						"unit_price": unit_price,
-						"subtotal": subtotal
+						"subtotal": subtotal,
+						"item_name": equipment.name
 					})
 				except MedicalEquipment.DoesNotExist:
-					return Response({"detail": "Equipment not found."}, status=status.HTTP_404_NOT_FOUND)
+					return Response({"detail": f"Equipment not found (id={item_data.get('equipment_id')})."}, status=status.HTTP_404_NOT_FOUND)
 
-		# Handle coupon discount
-		coupon_code = data.get("coupon_code")
+			elif product_type == "DIRECT_NEED":
+				# Direct order from a confirmed supplier for an equipment need
+				equipment_need_id = item_data.get("equipment_need_id")
+				unit_price = float(item_data.get("unit_price", 0))
+				item_name = item_data.get("name", "Equipment")
+				
+				if not equipment_need_id:
+					return Response({"detail": "equipment_need_id is required for DIRECT_NEED orders."}, status=status.HTTP_400_BAD_REQUEST)
+				
+				try:
+					equip_need = EquipmentNeed.objects.get(id=equipment_need_id)
+				except EquipmentNeed.DoesNotExist:
+					return Response({"detail": f"Equipment need not found (id={equipment_need_id})."}, status=status.HTTP_404_NOT_FOUND)
+				
+				if unit_price <= 0:
+					# Fallback to suggested_price from the equipment need
+					unit_price = float(equip_need.suggested_price or 0)
+				
+				subtotal = quantity * unit_price
+				total_amount += subtotal
+				order_items.append({
+					"product_type": "EQUIPMENT",
+					"equipment": None,  # No catalog equipment
+					"equipment_need": equip_need,
+					"item_name": item_name,
+					"quantity": quantity,
+					"unit_price": unit_price,
+					"subtotal": subtotal,
+					"is_direct_need": True,
+				})
+			else:
+				return Response({"detail": f"Unknown product_type: {product_type}"}, status=status.HTTP_400_BAD_REQUEST)
+
+		if not order_items:
+			return Response({"detail": "No valid items could be processed."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# ── 4. Handle coupon discount ──
+		coupon_code = body.get("coupon_code")
 		applied_coupon = None
 		discount_amount = 0
+		discount_percentage = 0
 		
 		if coupon_code:
 			try:
 				coupon = DonorCoupon.objects.get(code=coupon_code, donor=request.user)
-				
-				# Validate coupon
 				if coupon.is_used:
 					return Response({"detail": "This coupon has already been used."}, status=status.HTTP_400_BAD_REQUEST)
-				
-				# Apply discount
 				discount_amount = total_amount * (coupon.discount_percentage / 100)
 				total_amount = total_amount - discount_amount
 				applied_coupon = coupon
-				data["discount_percentage"] = coupon.discount_percentage
-				
+				discount_percentage = coupon.discount_percentage
 			except DonorCoupon.DoesNotExist:
-				return Response({"detail": "Invalid coupon code or coupon does not belong to you."}, status=status.HTTP_400_BAD_REQUEST)
+				return Response({"detail": "Invalid coupon code."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# ── 5. Determine supplier ──
+		# For DIRECT_NEED items, the supplier_id is sent explicitly from frontend
+		explicit_supplier_id = body.get("supplier_id")
+		if explicit_supplier_id:
+			try:
+				supplier = MedicalEssential.objects.get(id=explicit_supplier_id)
+			except MedicalEssential.DoesNotExist:
+				return Response({"detail": "Supplier not found."}, status=status.HTTP_404_NOT_FOUND)
 		else:
-			data["discount_percentage"] = 0
-
-		# Get supplier from first item
-		if order_items:
 			first_item = order_items[0]
-			if first_item["product_type"] == "STORE":
+			if first_item["product_type"] == "STORE" and first_item.get("store_product"):
 				supplier = first_item["store_product"].supplier
-			else:
+			elif first_item.get("equipment"):
 				supplier = first_item["equipment"].supplier
-			data["supplier_id"] = supplier.id
+			else:
+				return Response({"detail": "Could not determine supplier from order items."}, status=status.HTTP_400_BAD_REQUEST)
 
-		data["total_amount"] = total_amount
-		data["order_type"] = order_items[0]["product_type"] if order_items else "STORE"
+		# ── 6. Build serializer data (only fields the serializer expects) ──
+		serializer_data = {
+			"user_id": request.user.pk,
+			"supplier_id": supplier.id,
+			"order_type": order_items[0]["product_type"],
+			"total_amount": total_amount,
+			"currency": "INR",
+			"shipping_address": body.get("shipping_address", "N/A"),
+			"shipping_city": body.get("shipping_city", "N/A"),
+			"shipping_zip_code": body.get("shipping_zip_code", ""),
+			"contact_phone": body.get("contact_phone", "N/A"),
+			"notes": body.get("notes", ""),
+			"discount_percentage": discount_percentage,
+		}
+		
+		# Optional: link to equipment need
+		equipment_need_id = body.get("equipment_need_id")
+		if equipment_need_id:
+			serializer_data["equipment_need_id"] = equipment_need_id
 
-		# Create order
-		serializer = self.get_serializer(data=data)
-		serializer.is_valid(raise_exception=True)
+		print("DEBUG create_order: serializer_data =", serializer_data)
+
+		# ── 7. Create the order via serializer ──
+		serializer = self.get_serializer(data=serializer_data)
+		if not serializer.is_valid():
+			print("DEBUG create_order: SERIALIZER ERRORS =", serializer.errors)
+			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 		order = serializer.save()
 
-		# Create order items
+		# ── 8. Create order items and update stock ──
 		for item_data in order_items:
-			MedicalOrderItem.objects.create(
+			order_item = MedicalOrderItem.objects.create(
 				order=order,
 				product_type=item_data["product_type"],
 				store_product=item_data.get("store_product"),
 				equipment=item_data.get("equipment"),
+				item_name=item_data.get("item_name"),
 				quantity=item_data["quantity"],
 				unit_price=item_data["unit_price"],
 				subtotal=item_data["subtotal"]
 			)
-
-			# Update stock
-			if item_data["product_type"] == "STORE":
+			# Update stock (skip for direct need orders — no catalog product)
+			if item_data.get("is_direct_need"):
+				# Update the equipment need status to ORDERED
+				equip_need = item_data.get("equipment_need")
+				if equip_need:
+					equip_need.status = "ORDERED"
+					equip_need.save()
+			elif item_data["product_type"] == "STORE" and item_data.get("store_product"):
 				product = item_data["store_product"]
 				product.quantity_available -= item_data["quantity"]
 				product.save()
-			else:
+			elif item_data.get("equipment"):
 				equipment = item_data["equipment"]
 				equipment.quantity_available -= item_data["quantity"]
 				equipment.save()
 
-		# Mark coupon as used if it was applied
+		# ── 9. Mark coupon as used ──
 		if applied_coupon:
 			applied_coupon.is_used = True
 			applied_coupon.save()
 
+		# ── 10. Return order data ──
 		response_data = self.get_serializer(order).data
 		if applied_coupon:
 			response_data["coupon_applied"] = {
@@ -2360,7 +2581,11 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 				"discount_amount": float(discount_amount)
 			}
 
+		print("DEBUG create_order: SUCCESS — order", order.order_number)
 		return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def update_status(self, request, pk=None):
@@ -2371,13 +2596,21 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 		if new_status not in dict(MedicalOrder.STATUS_CHOICES):
 			return Response({"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
 
-		# Verify user is the supplier
-		try:
-			supplier = MedicalEssential.objects.get(user=request.user)
-			if order.supplier != supplier:
-				return Response({"detail": "You can only update orders for your own products."}, status=status.HTTP_403_FORBIDDEN)
-		except MedicalEssential.DoesNotExist:
-			return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
+		# Verify user permissions
+		if new_status == "RECEIVED":
+			# allow the order owner (hospital/donor) to mark as received
+			if order.user != request.user:
+				return Response({"detail": "Only the order owner can mark it as received."}, status=status.HTTP_403_FORBIDDEN)
+			if order.status != "SHIPPED":
+				return Response({"detail": "Order must be SHIPPED before it can be marked as RECEIVED."}, status=status.HTTP_400_BAD_REQUEST)
+		else:
+			# For other statuses, verify user is the supplier
+			try:
+				supplier = MedicalEssential.objects.get(user=request.user)
+				if order.supplier != supplier:
+					return Response({"detail": "You can only update orders for your own products."}, status=status.HTTP_403_FORBIDDEN)
+			except MedicalEssential.DoesNotExist:
+				return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
 		# Enforce transition to DELIVERED only from RECEIVED
 		if new_status == "DELIVERED" and order.status != "RECEIVED":
@@ -2448,6 +2681,49 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 		})
 
 	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def report_complaint(self, request, pk=None):
+		"""Hospital reports a complaint about an order (e.g., item not received)"""
+		order = self.get_object()
+		
+		if order.user != request.user:
+			return Response({"detail": "You can only report complaints for your own orders."}, status=status.HTTP_403_FORBIDDEN)
+		
+		complaint_message = request.data.get("complaint_message")
+		if not complaint_message:
+			return Response({"detail": "Complaint message is required."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		order.is_complained = True
+		order.complaint_message = complaint_message
+		order.save()
+		
+		return Response({
+			"message": "Complaint reported successfully. The supplier will be notified.",
+			"order": self.get_serializer(order).data
+		})
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def resolve_complaint(self, request, pk=None):
+		"""Supplier resolves a complaint about an order"""
+		order = self.get_object()
+		
+		# Verify supplier
+		try:
+			supplier = MedicalEssential.objects.get(user=request.user)
+			if order.supplier != supplier:
+				return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+		except MedicalEssential.DoesNotExist:
+			return Response({"detail": "Not a supplier"}, status=status.HTTP_403_FORBIDDEN)
+		
+		order.is_complained = False
+		# We keep the message for history but clear the flag
+		order.save()
+		
+		return Response({
+			"message": "Complaint marked as resolved.",
+			"order": self.get_serializer(order).data
+		})
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
 	def mark_dispensed(self, request, pk=None):
 		"""Medical store marks order as dispensed (given to donor)"""
 		order = self.get_object()
@@ -2460,8 +2736,8 @@ class MedicalOrderViewSet(viewsets.ModelViewSet):
 		except MedicalEssential.DoesNotExist:
 			return Response({"detail": "Medical Essential profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
-		# Allow dispensing from PENDING, APPROVED, CONFIRMED, or SHIPPED status
-		allowed_statuses = ["PENDING", "APPROVED", "CONFIRMED", "SHIPPED"]
+		# Allow dispensing from PENDING, APPROVED, CONFIRMED, SHIPPED, or RECEIVED status
+		allowed_statuses = ["PENDING", "APPROVED", "CONFIRMED", "SHIPPED", "RECEIVED"]
 		if order.status not in allowed_statuses:
 			return Response({"detail": f"Cannot dispense order with status '{order.status}'. Must be one of: {', '.join(allowed_statuses)}."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2823,6 +3099,51 @@ class EquipmentNeedViewSet(viewsets.ModelViewSet):
 		if status:
 			queryset = queryset.filter(status=status)
 		return queryset
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def confirm_creation(self, request, pk=None):
+		"""Medical supplier confirms they have created the item in their catalog from this request"""
+		need = self.get_object()
+		
+		# Verify user is a medical essential supplier
+		try:
+			supplier = MedicalEssential.objects.get(user=request.user)
+		except MedicalEssential.DoesNotExist:
+			return Response({"detail": "Only medical essential suppliers can confirm creation."}, status=status.HTTP_403_FORBIDDEN)
+		
+		suggested_price = request.data.get("suggested_price")
+		if not suggested_price:
+			return Response({"detail": "Suggested price is required."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		need.requested_supplier = supplier
+		need.suggested_price = suggested_price
+		need.is_confirmed_by_supplier = True
+		need.save()
+		
+		return Response({
+			"message": "Item creation confirmed. The hospital will now be able to place an order.",
+			"need": self.get_serializer(need).data
+		})
+
+	@action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+	def hospital_confirm(self, request, pk=None):
+		"""Hospital confirms the supplier's creation and marks the need as ready for ordering"""
+		need = self.get_object()
+		
+		if need.hospital.user != request.user:
+			return Response({"detail": "Only the hospital that created this need can confirm it."}, status=status.HTTP_403_FORBIDDEN)
+		
+		if not need.is_confirmed_by_supplier:
+			return Response({"detail": "Supplier hasn't confirmed creation yet."}, status=status.HTTP_400_BAD_REQUEST)
+		
+		# In this flow, hospital confirming might just mean it stays OPEN but they can now order it.
+		# We'll mark it as "READY" or just return success if it's just a UI state.
+		# For now, let's keep it OPEN but return the updated data.
+		
+		return Response({
+			"message": "Supplier confirmation verified. You can now proceed to order the item.",
+			"need": self.get_serializer(need).data
+		})
 
 
 class EquipmentOrderViewSet(viewsets.ModelViewSet):

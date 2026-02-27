@@ -23,7 +23,7 @@ export default function HospitalDashboard() {
 		required_blood_group: "",
 		patient_name: "",
 		patient_details: "",
-		poster_image: "",
+		poster_image: null,
 		status: "NORMAL",
 		quantity_needed: 1,
 		needed_by: "",
@@ -446,13 +446,27 @@ export default function HospitalDashboard() {
 	async function handleSubmitNeed(e) {
 		e.preventDefault()
 		try {
+			// Format needed_by datetime if provided
+			let neededBy = null
+			if (needForm.needed_by) {
+				neededBy = new Date(needForm.needed_by).toISOString()
+			}
+
+			const formData = new FormData()
+			Object.keys(needForm).forEach(key => {
+				if (key === "poster_image") {
+					if (needForm[key]) formData.append(key, needForm[key])
+				} else if (key === "needed_by") {
+					if (neededBy) formData.append(key, neededBy)
+				} else {
+					formData.append(key, needForm[key])
+				}
+			})
+			formData.append("hospital_id", hospital.id)
+
 			await apiFetch("/hospital-needs/", {
 				method: "POST",
-				body: JSON.stringify({
-					...needForm,
-					hospital_id: hospital.id,
-					needed_by: needForm.needed_by || null,
-				}),
+				body: formData,
 			})
 			setShowNeedForm(false)
 			setNeedForm({
@@ -460,13 +474,14 @@ export default function HospitalDashboard() {
 				required_blood_group: "",
 				patient_name: "",
 				patient_details: "",
-				poster_image: "",
+				poster_image: null,
 				status: "NORMAL",
 				quantity_needed: 1,
 				needed_by: "",
 				notes: "",
 			})
 			loadHospitalNeeds(hospital.id)
+			alert("Need posted successfully!")
 		} catch (error) {
 			alert("Error creating need. Please try again.")
 		}
@@ -1035,13 +1050,12 @@ export default function HospitalDashboard() {
 											/>
 										</div>
 										<div>
-											<label className="block text-sm font-medium text-pink-100 mb-1">Poster Image URL</label>
+											<label className="block text-sm font-medium text-pink-100 mb-1">Poster Image</label>
 											<input
-												type="url"
-												value={needForm.poster_image}
-												onChange={(e) => setNeedForm({ ...needForm, poster_image: e.target.value })}
+												type="file"
+												accept="image/*"
+												onChange={(e) => setNeedForm({ ...needForm, poster_image: e.target.files[0] })}
 												className="w-full rounded-lg border border-[#F6D6E3] bg-[#1A1A2E] px-3 py-2 text-white outline-none focus:border-[#E91E63]"
-												placeholder="https://example.com/poster.jpg"
 											/>
 										</div>
 										<div>

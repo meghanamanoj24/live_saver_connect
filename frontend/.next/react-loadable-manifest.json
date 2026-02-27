@@ -1,4 +1,10 @@
 {
+  "lib\\pdf-generator.js -> jspdf": {
+    "id": "lib\\pdf-generator.js -> jspdf",
+    "files": [
+      "static/chunks/node_modules_jspdf_dist_jspdf_es_min_js.js"
+    ]
+  },
   "node_modules\\jspdf\\dist\\jspdf.es.min.js -> canvg": {
     "id": "node_modules\\jspdf\\dist\\jspdf.es.min.js -> canvg",
     "files": [
@@ -16,9 +22,5 @@
     "files": [
       "static/chunks/node_modules_html2canvas_dist_html2canvas_js.js"
     ]
-  },
-  "pages\\donor\\blood.jsx -> jspdf": {
-    "id": "pages\\donor\\blood.jsx -> jspdf",
-    "files": []
   }
 }

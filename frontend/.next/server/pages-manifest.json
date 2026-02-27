@@ -2,9 +2,13 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/medical-essential": "pages/medical-essential.js",
-  "/hospital/dashboard": "pages/hospital/dashboard.js",
-  "/needs/post": "pages/needs/post.js",
   "/": "pages/index.js",
-  "/donor/blood": "pages/donor/blood.js"
+  "/register/organ": "pages/register/organ.js",
+  "/hospital/needs": "pages/hospital/needs.js",
+  "/donor/organ": "pages/donor/organ.js",
+  "/donor/dashboard": "pages/donor/dashboard.js",
+  "/donor/book-appointment": "pages/donor/book-appointment.js",
+  "/hospital/dashboard": "pages/hospital/dashboard.js",
+  "/hospital/donors": "pages/hospital/donors.js",
+  "/hospital/appointments": "pages/hospital/appointments.js"
 }

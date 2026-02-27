@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -31,6 +32,7 @@ MIDDLEWARE = [
 	"django.contrib.auth.middleware.AuthenticationMiddleware",
 	"django.contrib.messages.middleware.MessageMiddleware",
 	"django.middleware.clickjacking.XFrameOptionsMiddleware",
+	"core.middleware.AuthDebugMiddleware",
 ]
 
 ROOT_URLCONF = "lifesaver_backend.urls"
@@ -75,7 +77,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-MEDIA_URL = "/media/"
+MEDIA_URL = "http://127.0.0.1:8000/media/" if DEBUG else "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -87,6 +89,11 @@ REST_FRAMEWORK = {
 	"DEFAULT_PERMISSION_CLASSES": (
 		"rest_framework.permissions.IsAuthenticatedOrReadOnly",
 	),
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=20),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1)
 }
 
 # Dev CORS settings
@@ -102,6 +109,7 @@ EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.gmail.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = "hospitalemergency1234@gmail.com"
+EMAIL_HOST_USER = "meghana.24pmc134@mariancollege.org"
 EMAIL_HOST_PASSWORD = "skkg hqjd aupg tfbi"
+DEFAULT_FROM_EMAIL = "meghana.24pmc134@mariancollege.org"
 

@@ -6,7 +6,9 @@ function getBrowserToken() {
 	if (typeof window === "undefined") {
 		return null
 	}
-	return localStorage.getItem("accessToken")
+	const token = localStorage.getItem("accessToken")
+	if (!token || token === "null" || token === "undefined") return null
+	return token
 }
 
 function clearTokens() {
@@ -162,7 +164,7 @@ export async function apiFetch(path, options = {}) {
 			}
 		}
 
-		console.log(url, 'failed url')
+		console.error(`apiFetch failed: ${url} [${response.status}]`, payload)
 
 		const error = new Error(
 			(payload && (payload.detail || payload.message)) || `Request failed with status ${response.status}`,

@@ -17,7 +17,6 @@ from core.views import (
 	HospitalNeedViewSet,
 	AppointmentViewSet,
 	DeceasedDonorRequestViewSet,
-	AccidentAlertViewSet,
 	BloodDonationEventViewSet,
 	EventRegistrationViewSet,
 	MedicalEssentialViewSet,
@@ -54,7 +53,6 @@ router.register(r"donation-requests", DonationRequestViewSet)
 router.register(r"hospital-needs", HospitalNeedViewSet)
 router.register(r"appointments", AppointmentViewSet)
 router.register(r"deceased-donor-requests", DeceasedDonorRequestViewSet)
-router.register(r"accident-alerts", AccidentAlertViewSet)
 router.register(r"blood-donation-events", BloodDonationEventViewSet)
 router.register(r"event-registrations", EventRegistrationViewSet)
 
@@ -86,6 +84,6 @@ urlpatterns = [
 
 # Serve media files in development
 if settings.DEBUG:
-	urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+	urlpatterns += static("/media/", document_root=settings.MEDIA_ROOT)
 
 

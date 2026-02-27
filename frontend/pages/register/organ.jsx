@@ -83,7 +83,6 @@ export default function OrganRegistry() {
 	const [activeTab, setActiveTab] = useState("pledge")
 	const [deceasedForm, setDeceasedForm] = useState(DEFAULT_DECEASED_FORM)
 	const [isSubmittingDeceased, setIsSubmittingDeceased] = useState(false)
-	const [accidentAlerts, setAccidentAlerts] = useState([])
 	const [userLocation, setUserLocation] = useState(null)
 	const [pledgeHistory, setPledgeHistory] = useState([])
 	const [reportUploaded, setReportUploaded] = useState(false)
@@ -200,19 +199,6 @@ export default function OrganRegistry() {
 					console.error("Failed to load emergency needs:", e)
 				}
 
-				// Load accident alerts
-				try {
-					const params = new URLSearchParams()
-					if (userLocation) {
-						params.append("latitude", userLocation.latitude)
-						params.append("longitude", userLocation.longitude)
-					}
-					params.append("status", "ACTIVE")
-					const alerts = await apiFetch(`/accident-alerts/?${params.toString()}`)
-					if (!cancelled) setAccidentAlerts(alerts.slice(0, 5))
-				} catch (e) {
-					console.error("Failed to load accident alerts:", e)
-				}
 			} catch (error) {
 				if (!cancelled) {
 					setFeedback({ type: "error", message: error.message || "Unable to load data." })
@@ -896,15 +882,6 @@ export default function OrganRegistry() {
 										}`}
 								>
 									Emergency Cases
-								</button>
-								<button
-									onClick={() => setActiveTab("accidents")}
-									className={`px-4 py-2 text-sm font-semibold transition ${activeTab === "accidents"
-										? "border-b-2 border-[#E91E63] text-[#E91E63]"
-										: "text-pink-100/70 hover:text-white"
-										}`}
-								>
-									Accident Alerts
 								</button>
 							</div>
 
@@ -2081,67 +2058,6 @@ export default function OrganRegistry() {
 								</div>
 							)}
 
-							{/* Accident Alerts Tab */}
-							{activeTab === "accidents" && (
-								<div className="rounded-3xl border border-[#F6D6E3]/30 bg-[#131326]/90 p-8">
-									<h2 className="text-2xl font-semibold text-white mb-4">Nearby Accident Alerts</h2>
-									<p className="text-sm text-pink-100/70 mb-6">
-										Recent accidents in your area that may require organ donation assistance.
-									</p>
-									<div className="space-y-4">
-										{accidentAlerts.length === 0 ? (
-											<div className="rounded-2xl border border-[#F6D6E3]/20 bg-[#131326] p-8 text-center">
-												<p className="text-pink-100/70">No accident alerts in your area at the moment.</p>
-											</div>
-										) : (
-											accidentAlerts.map((alert) => (
-												<div key={alert.id} className="rounded-2xl border border-[#F59E0B]/40 bg-[#1A1A2E] p-6">
-													<div className="flex items-start justify-between">
-														<div className="flex-1">
-															<h3 className="text-xl font-semibold text-white">{alert.title}</h3>
-															{alert.description && (
-																<p className="mt-2 text-sm text-pink-100/80">{alert.description}</p>
-															)}
-															<div className="mt-4 grid gap-2 sm:grid-cols-2">
-																<div>
-																	<span className="text-xs text-pink-100/60">Location:</span>
-																	<p className="text-sm font-medium text-white">{alert.location}, {alert.city}</p>
-																</div>
-																{alert.accident_time && (
-																	<div>
-																		<span className="text-xs text-pink-100/60">Time:</span>
-																		<p className="text-sm font-medium text-white">
-																			{new Date(alert.accident_time).toLocaleString()}
-																		</p>
-																	</div>
-																)}
-																{alert.hospital_referred?.name && (
-																	<div>
-																		<span className="text-xs text-pink-100/60">Hospital:</span>
-																		<p className="text-sm font-medium text-white">{alert.hospital_referred.name}</p>
-																	</div>
-																)}
-																{alert.contact_phone && (
-																	<div>
-																		<span className="text-xs text-pink-100/60">Contact:</span>
-																		<p className="text-sm font-medium text-white">{alert.contact_phone}</p>
-																	</div>
-																)}
-															</div>
-														</div>
-														<span className={`ml-4 rounded-full px-3 py-1 text-xs font-semibold uppercase ${alert.severity === "CRITICAL" ? "bg-[#DC2626]/20 text-[#F87171]" :
-															alert.severity === "HIGH" ? "bg-[#F59E0B]/20 text-[#FBBF24]" :
-																"bg-[#3B82F6]/20 text-[#93C5FD]"
-															}`}>
-															{alert.severity}
-														</span>
-													</div>
-												</div>
-											))
-										)}
-									</div>
-								</div>
-							)}
 						</section>
 					)}
 				</div>

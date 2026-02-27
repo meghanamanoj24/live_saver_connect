@@ -12,6 +12,29 @@ const DONATION_REQUESTS_STORAGE_KEY = "lifesaver:donation_requests"
 const HEALTH_REPORT_STORAGE_KEY_BLOOD = "lifesaver:health_report_uploaded_blood"
 const HEALTH_REPORT_FILENAME_KEY_BLOOD = "lifesaver:health_report_filename_blood"
 
+// Blood Compatibility Map (Patient Group -> Donor Groups that patient can receive from)
+const BLOOD_RECEIVE_COMPATIBILITY = {
+	"O-": ["O-"],
+	"O+": ["O-", "O+"],
+	"A-": ["O-", "A-"],
+	"A+": ["O-", "O+", "A-", "A+"],
+	"B-": ["O-", "B-"],
+	"B+": ["O-", "O+", "B-", "B+"],
+	"AB-": ["O-", "A-", "B-", "AB-"],
+	"AB+": ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"],
+}
+
+// Helper to check if a donor's blood group is compatible with a patient's required group
+function isCompatible(donor_bg, patient_bg) {
+	if (!donor_bg) return false
+	// If patient BG is missing (e.g. emergency case), maybe show it? 
+	// For now, let's assume if patient_bg is missing, it MIGHT be compatible if we want to show all.
+	// But strictly, we need to know.
+	if (!patient_bg) return false
+	const compatibleDonors = BLOOD_RECEIVE_COMPATIBILITY[patient_bg] || []
+	return compatibleDonors.includes(donor_bg)
+}
+
 // Mock upcoming events data - will be replaced by API data if available
 const UPCOMING_EVENTS_FALLBACK = [
 	{
@@ -61,9 +84,11 @@ export default function BloodDonation() {
 	const [donationRequests, setDonationRequests] = useState([])
 	const [emergencyNeeds, setEmergencyNeeds] = useState([])
 	const [matchedNeeds, setMatchedNeeds] = useState([])
+	const [rawNeeds, setRawNeeds] = useState([])
 	const [activeTab, setActiveTab] = useState("matches")
 	const [donationHistory, setDonationHistory] = useState([])
 	const [confirmingArrival, setConfirmingArrival] = useState(false)
+	const [updatingWorkflow, setUpdatingWorkflow] = useState(null)
 	const [coupons, setCoupons] = useState([])
 	const [selectedCoupon, setSelectedCoupon] = useState(null)
 
@@ -303,14 +328,115 @@ export default function BloodDonation() {
 
 	async function loadEmergencyNeeds() {
 		try {
-			const [needs, matches] = await Promise.all([
+			const [allEmergency, allHospital] = await Promise.all([
 				apiFetch("/needs/?status=OPEN&need_type=BLOOD"),
-				apiFetch("/needs/matched_needs/")
+				apiFetch("/hospital-needs/?need_type=BLOOD&active_only=true")
 			])
-			setEmergencyNeeds(needs)
-			setMatchedNeeds(matches.filter(m => m.need_type === "BLOOD"))
+
+			const combinedAllRaw = [
+				...(Array.isArray(allEmergency) ? allEmergency : []),
+				...(Array.isArray(allHospital) ? allHospital.map(h => ({ ...h, isHospitalNeed: true })) : [])
+			]
+
+			setRawNeeds(combinedAllRaw)
 		} catch (error) {
 			console.error("Error loading emergency needs:", error)
+			setRawNeeds([])
+		}
+	}
+
+	// Reactive filtering for Need Hiding and Compatibility
+	useEffect(() => {
+		const donor = donorProfile || localProfile
+		const donor_blood_group = donor?.blood_group || ""
+		const city = donor?.city || ""
+
+		// Filter out needs with existing requests
+		const respondedNeedIds = new Set(donationRequests.map(r => {
+			const needId = r.is_hospital_request ? r.hospital_need?.id || r.hospital_need : r.emergency_need?.id || r.emergency_need;
+			return `${needId}-${r.is_hospital_request ? 'HOSPITAL' : 'EMERGENCY'}`;
+		}));
+
+		const filteredNeeds = rawNeeds.filter(need => {
+			const key = `${need.id}-${need.isHospitalNeed ? 'HOSPITAL' : 'EMERGENCY'}`;
+			return !respondedNeedIds.has(key);
+		});
+
+		const finalMatches = []
+		const finalOthers = []
+
+		filteredNeeds.forEach(need => {
+			const patient_bg = need.required_blood_group
+			const needCity = need.isHospitalNeed ? need.hospital?.city : need.city
+			const isCityMatch = city && needCity && city.toLowerCase().trim() === needCity.toLowerCase().trim()
+			const isBloodMatch = isCompatible(donor_blood_group, patient_bg)
+
+			if (isBloodMatch) {
+				finalMatches.push({ ...need, isCriticalMatch: isCityMatch })
+			} else {
+				finalOthers.push(need)
+			}
+		})
+
+		const dedupe = (list) => {
+			const seen = new Set()
+			return list.filter(item => {
+				const key = `${item.id}-${item.isHospitalNeed ? 'HOSPITAL' : 'EMERGENCY'}`
+				if (seen.has(key)) return false
+				seen.add(key)
+				return true
+			})
+		}
+
+		setMatchedNeeds(dedupe(finalMatches.length > 0 ? finalMatches : filteredNeeds))
+		setEmergencyNeeds(dedupe(filteredNeeds))
+	}, [rawNeeds, donationRequests, donorProfile, localProfile])
+
+	async function handleDonate(need) {
+		// Use persisted eligibility flags if healthAssessment session state is null
+		const isCurrentlyEligible = healthEligible && healthReportUploaded;
+
+		if (!isCurrentlyEligible && !healthAssessment?.canDonate) {
+			alert("Please complete the health assessment and upload your verified report first.")
+			const element = document.getElementById("health-assessment-section")
+			if (element) element.scrollIntoView({ behavior: 'smooth' })
+			return
+		}
+
+		if (!confirm(`Are you sure you want to donate for this request at ${need.hospital?.name || "the requested location"}?`)) {
+			return
+		}
+
+		try {
+			// Construct payload depending on need type
+			const payload = {
+				request_type: "BLOOD",
+				status: "PENDING"
+			}
+
+			if (need.isHospitalNeed) {
+				payload.hospital_id = need.hospital?.id || need.hospital_id
+				payload.hospital_need_id = need.id
+			} else {
+				// For Emergency Post (Public)
+				payload.emergency_need_id = need.id
+				// Hospital ID is optional now
+			}
+
+			await apiFetch("/donation-requests/", {
+				method: "POST",
+				body: JSON.stringify(payload)
+			})
+			alert("Donation request sent successfully! You will be contacted for further steps.")
+			loadDonationRequests()
+
+			// Restore redirect for emergency needs
+			if (!need.isHospitalNeed) {
+				window.location.href = "/needs/post"
+			}
+		} catch (error) {
+			console.error("Donation request failed:", error)
+			alert(error.message || "Failed to send donation request")
 		}
 	}
 
@@ -363,7 +489,7 @@ export default function BloodDonation() {
 	}
 
 	const handleDeleteRequest = async (requestId) => {
-		if (!confirm("Are you sure you want to permanently delete this rejected request?")) return
+		if (!confirm("Are you sure you want to permanently delete this donation request?")) return
 
 		try {
 			await apiFetch(`/donation-requests/${requestId}/`, {
@@ -374,6 +500,23 @@ export default function BloodDonation() {
 		} catch (err) {
 			console.error("Error deleting request:", err)
 			alert("Failed to delete the request. Please try again.")
+		}
+	}
+
+	// Handle workflow updates
+	async function handleWorkflowAction(requestId, action) {
+		setUpdatingWorkflow(requestId)
+		try {
+			await apiFetch(`/donation-requests/${requestId}/${action}/`, {
+				method: "POST"
+			})
+			await loadDonationRequests()
+			alert(`Action "${action.replace('_', ' ')}" successful!`)
+		} catch (error) {
+			console.error(`Error performing ${action}:`, error)
+			alert(`Failed to perform ${action}. Please try again.`)
+		} finally {
+			setUpdatingWorkflow(null)
 		}
 	}
 
@@ -500,7 +643,7 @@ export default function BloodDonation() {
 
 	// Computed values for request cycle management
 	const hasActiveRequest = useMemo(() => {
-		return donationRequests.some(r => ["PENDING", "ACCEPTED", "ARRIVED"].includes(r.status))
+		return donationRequests.some(r => ["PENDING", "ACCEPTED", "SCHEDULED", "SCHEDULE_CONFIRMED", "REACHING", "ARRIVED"].includes(r.status))
 	}, [donationRequests])
 
 	const mostRecentRequest = useMemo(() => {
@@ -525,25 +668,39 @@ export default function BloodDonation() {
 		const uploadStatus = localStorage.getItem(HEALTH_REPORT_STORAGE_KEY_BLOOD)
 		if (uploadStatus === "true") {
 			setHealthReportUploaded(true)
-		}
-
-		// Check health eligibility from health history
-		const savedHistory = localStorage.getItem("lifesaver:health_history")
-		if (savedHistory) {
-			try {
-				const history = JSON.parse(savedHistory)
-				if (history.length > 0) {
-					const lastEntry = history[history.length - 1]
-					// Score >= 80 means eligible
-					if (lastEntry.score >= 80) {
-						setHealthEligible(true)
-					}
-				}
-			} catch {
-				// Ignore parse errors
-			}
+			setHealthEligible(true)
 		}
 	}, [])
+
+	// Sync with backend download history
+	useEffect(() => {
+		if (downloadHistory.length > 0) {
+			const latestReport = downloadHistory[0]
+			const reportTime = new Date(latestReport.timestamp).getTime()
+
+			// Check if this report was generated AFTER the most recent request
+			let isReportFresh = true
+			if (mostRecentRequest) {
+				const requestTime = new Date(mostRecentRequest.created_at).getTime()
+				if (reportTime <= requestTime) {
+					isReportFresh = false
+				}
+			}
+
+			if (isReportFresh) {
+				setHealthReportUploaded(true)
+				setHealthEligible(true)
+			} else {
+				// Clear status if the latest report is from a previous cycle
+				setHealthReportUploaded(false)
+				setHealthEligible(false)
+			}
+		} else {
+			// No history means nothing is uploaded/verified
+			setHealthReportUploaded(false)
+			setHealthEligible(false)
+		}
+	}, [downloadHistory, mostRecentRequest])
 
 	// Reset health report status when donation is COMPLETED or REJECTED (for the cycle loop)
 	useEffect(() => {
@@ -1029,7 +1186,7 @@ export default function BloodDonation() {
 								<div className="rounded-2xl border border-yellow-500/30 bg-[#131326] p-6 shadow-lg shadow-yellow-500/5 flex items-center justify-between">
 									<div>
 										<p className="text-sm text-pink-100/80">Star Reward Progress</p>
-										<h2 className="mt-3 text-2xl font-bold text-white">{(displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0)} / 3 Stars</h2>
+										<h2 className="mt-3 text-2xl font-bold text-white">{(displayDonor?.current_stars > 0 && displayDonor?.current_stars % 3 === 0) ? 0 : (displayDonor?.current_stars % 3)} / 3 Stars</h2>
 										<p className="mt-2 text-xs text-yellow-100/60 leading-relaxed">
 											Earn 3 stars to receive <span className="text-yellow-400 font-bold">50 Rs</span> & <span className="text-yellow-400 font-bold">20% Discount Coupon</span>!
 										</p>
@@ -1049,7 +1206,7 @@ export default function BloodDonation() {
 												className="text-yellow-500 transition-all duration-1000 ease-out"
 												strokeWidth="10"
 												strokeDasharray={251.2}
-												strokeDashoffset={251.2 - (251.2 * ((displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0))) / 3}
+												strokeDashoffset={251.2 - (251.2 * ((displayDonor?.current_stars > 0 && displayDonor?.current_stars % 3 === 0) ? 0 : (displayDonor?.current_stars % 3))) / 3}
 												strokeLinecap="round"
 												stroke="currentColor"
 												fill="transparent"
@@ -1059,7 +1216,7 @@ export default function BloodDonation() {
 											/>
 										</svg>
 										<div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-yellow-500">
-											{Math.round((((displayDonor?.current_stars % 3) || (displayDonor?.current_stars > 0 ? 3 : 0)) / 3) * 100)}%
+											{Math.round((((displayDonor?.current_stars > 0 && displayDonor?.current_stars % 3 === 0) ? 0 : (displayDonor?.current_stars % 3)) / 3) * 100)}%
 										</div>
 									</div>
 								</div>
@@ -1574,9 +1731,9 @@ export default function BloodDonation() {
 																		</svg>
 																	</div>
 																	<div className="flex-1">
-																		<p className="text-sm font-semibold text-green-300">Report Uploaded Successfully</p>
+																		<p className="text-sm font-semibold text-green-300">Verified Report</p>
 																		<p className="text-xs text-green-200/60">
-																			{localStorage.getItem(HEALTH_REPORT_FILENAME_KEY_BLOOD) || "health-report.pdf"}
+																			Check another report for next donation
 																		</p>
 																	</div>
 																</div>
@@ -1806,7 +1963,18 @@ export default function BloodDonation() {
 										{/* My Donation Requests Column */}
 										<div className="rounded-2xl border border-[#F6D6E3] bg-[#131326] p-6">
 											<div className="flex items-center justify-between mb-4">
-												<h2 className="text-lg font-semibold text-white">My Donation Requests</h2>
+												<div className="flex items-center gap-2">
+													<h2 className="text-lg font-semibold text-white">My Donation Requests</h2>
+													<button
+														onClick={() => loadDonationRequests()}
+														className="text-pink-100/40 hover:text-[#E91E63] transition p-1 rounded-full hover:bg-white/5"
+														title="Refresh Requests"
+													>
+														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+														</svg>
+													</button>
+												</div>
 												<button
 													onClick={handleNewRequestClick}
 													className={`text-sm ${canRequestNewDonation ? "text-[#E91E63] hover:underline" : "text-gray-500 cursor-not-allowed"}`}
@@ -1841,42 +2009,74 @@ export default function BloodDonation() {
 											{donationRequests.length > 0 ? (
 												<div className="space-y-4">
 													{/* Action Required / Updates */}
-													{donationRequests.filter(r => ["ACCEPTED", "ARRIVED", "REJECTED"].includes(r.status)).length > 0 && (
-														<div className="space-y-2">
-															<p className="text-[10px] font-bold text-[#E91E63] uppercase tracking-widest pl-1 mb-2">Response from Hospitals</p>
-															{donationRequests.filter(r => ["ACCEPTED", "ARRIVED", "REJECTED"].includes(r.status)).map((request) => {
-																const hospital = request.hospital || {}
+													{donationRequests.filter(r => ["ACCEPTED", "SCHEDULED", "SCHEDULE_CONFIRMED", "REACHING", "ARRIVED", "REJECTED"].includes(r.status)).length > 0 && (
+														<div className="space-y-3">
+															<p className="text-[10px] font-bold text-[#E91E63] uppercase tracking-widest pl-1 mb-2">Hospital Responses & Workflow</p>
+															{donationRequests.filter(r => ["ACCEPTED", "SCHEDULED", "SCHEDULE_CONFIRMED", "REACHING", "ARRIVED", "REJECTED"].includes(r.status)).map((request) => {
+																const hospital = request.hospital
+																const emergency = request.emergency_need
 																const statusColors = {
 																	ACCEPTED: "bg-green-500/10 text-green-300 border-green-500/20",
+																	SCHEDULED: "bg-purple-500/10 text-purple-300 border-purple-500/20",
+																	SCHEDULE_CONFIRMED: "bg-cyan-500/10 text-cyan-300 border-cyan-500/20",
+																	REACHING: "bg-orange-500/10 text-orange-300 border-orange-500/20",
 																	ARRIVED: "bg-blue-500/10 text-blue-300 border-blue-500/20",
 																	REJECTED: "bg-red-500/10 text-red-300 border-red-500/20",
 																}
 																return (
-																	<div key={request.id} className="rounded-lg border border-[#E91E63]/20 bg-[#E91E63]/5 p-3 flex items-center justify-between gap-3 shadow-lg shadow-[#e91e6305]">
-																		<div className="flex-1 min-w-0">
-																			<div className="flex items-center gap-2">
-																				<p className="font-bold text-white text-xs truncate">{hospital.name || "Hospital"}</p>
-																				<span className={`px-1.5 py-0.5 rounded text-[8px] font-black border uppercase ${statusColors[request.status]}`}>
-																					{request.status}
-																				</span>
+																	<div key={request.id} className="rounded-xl border border-white/5 bg-white/5 p-4 space-y-3 transition hover:bg-white/[0.07]">
+																		<div className="flex items-center justify-between gap-3">
+																			<div className="flex-1 min-w-0">
+																				<div className="flex items-center gap-2">
+																					<p className="font-bold text-white text-xs truncate">
+																						{hospital ? hospital.name : (emergency ? "Emergency Request" : "System Request")}
+																					</p>
+																					<span className={`px-1.5 py-0.5 rounded text-[8px] font-black border uppercase ${statusColors[request.status] || "bg-gray-500/10 text-gray-400"}`}>
+																						{request.status.replace('_', ' ')}
+																					</span>
+																				</div>
+																				{request.scheduled_date && (
+																					<p className="text-[9px] text-pink-100/60 mt-0.5 flex items-center gap-1">
+																						🕒 Scheduled: {new Date(request.scheduled_date).toLocaleString()}
+																					</p>
+																				)}
 																			</div>
-																			<p className="text-[9px] text-pink-100/40 mt-1">
-																				{request.status === "ACCEPTED" ? "Your request was accepted! Please visit the hospital." :
-																					request.status === "REJECTED" ? "Request rejected. Please check notes or try again." :
-																						"Arrival confirmed. Donation in progress..."}
-																			</p>
 																		</div>
-																		<div className="flex items-center gap-2">
-																			{request.status === "ACCEPTED" && (
+
+																		<div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/5">
+																			{request.status === "SCHEDULED" && (
 																				<button
-																					onClick={() => handleConfirmArrival(request.id)}
-																					className="rounded bg-[#E91E63] px-3 py-1 text-[9px] font-black text-white hover:opacity-90 transition shadow-md shadow-[#e91e6340] uppercase"
+																					onClick={() => handleWorkflowAction(request.id, 'confirm_schedule')}
+																					disabled={updatingWorkflow === request.id}
+																					className="rounded bg-cyan-600 px-3 py-1.5 text-[9px] font-black text-white hover:bg-cyan-500 transition shadow-md shadow-cyan-900/20 uppercase disabled:opacity-50"
 																				>
-																					I HAVE REACHED 📍
+																					{updatingWorkflow === request.id ? "Updating..." : "Confirm Schedule ✅"}
 																				</button>
 																			)}
+																			{request.status === "SCHEDULE_CONFIRMED" && (
+																				<button
+																					onClick={() => handleWorkflowAction(request.id, 'confirm_reaching')}
+																					disabled={updatingWorkflow === request.id}
+																					className="rounded bg-orange-600 px-3 py-1.5 text-[9px] font-black text-white hover:bg-orange-500 transition shadow-md shadow-orange-900/20 uppercase disabled:opacity-50"
+																				>
+																					{updatingWorkflow === request.id ? "Updating..." : "I am Reaching 🚗"}
+																				</button>
+																			)}
+																			{["REACHING", "ACCEPTED"].includes(request.status) && (
+																				<button
+																					onClick={() => handleConfirmArrival(request.id)}
+																					disabled={confirmingArrival || updatingWorkflow === request.id}
+																					className="rounded bg-[#E91E63] px-3 py-1.5 text-[9px] font-black text-white hover:opacity-90 transition shadow-md shadow-[#e91e6340] uppercase disabled:opacity-50"
+																				>
+																					{confirmingArrival ? "Confirming..." : "I HAVE ARRIVED 📍"}
+																				</button>
+																			)}
+																			{request.status === "ACCEPTED" && !request.scheduled_date && (
+																				<p className="text-[9px] text-yellow-300/60 italic">Waiting for hospital to set schedule...</p>
+																			)}
+
 																			{request.status === "REJECTED" && (
-																				<div className="flex items-center gap-2">
+																				<div className="flex items-center gap-2 w-full justify-between">
 																					<button
 																						onClick={() => {
 																							const element = document.getElementById("health-assessment-section")
@@ -1912,16 +2112,31 @@ export default function BloodDonation() {
 														<div className="space-y-2">
 															<p className="text-[10px] font-bold text-pink-100/30 uppercase tracking-widest pl-1 mb-2">Pending Confirmation</p>
 															{donationRequests.filter(r => r.status === "PENDING").map((request) => {
-																const hospital = request.hospital || {}
+																const hospital = request.hospital
+																const emergency = request.emergency_need
 																return (
 																	<div key={request.id} className="rounded-lg border border-white/5 bg-white/5 p-3 flex items-center justify-between gap-3">
 																		<div className="flex-1 min-w-0">
-																			<p className="font-semibold text-white/80 text-xs truncate">{hospital.name || "Hospital"}</p>
-																			<p className="text-[10px] text-pink-100/30 italic">Awaiting hospital response...</p>
+																			<p className="font-semibold text-white/80 text-xs truncate">
+																				{hospital ? hospital.name : (emergency ? "Emergency Request" : "System Request")}
+																			</p>
+																			{emergency && <p className="text-[10px] text-pink-100/50 block truncate">{emergency.city} • {emergency.contact_phone}</p>}
+																			<p className="text-[10px] text-pink-100/30 italic">Awaiting response...</p>
 																		</div>
-																		<span className="px-1.5 py-0.5 rounded text-[8px] font-bold border bg-yellow-500/5 text-yellow-500/50 border-yellow-500/10 uppercase">
-																			PENDING
-																		</span>
+																		<div className="flex items-center gap-2">
+																			<span className="px-1.5 py-0.5 rounded text-[8px] font-bold border bg-yellow-500/5 text-yellow-500/50 border-yellow-500/10 uppercase">
+																				PENDING
+																			</span>
+																			<button
+																				onClick={() => handleDeleteRequest(request.id)}
+																				className="p-1 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition group"
+																				title="Delete pending request"
+																			>
+																				<svg className="w-3 h-3 group-hover:scale-110 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																					<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+																				</svg>
+																			</button>
+																		</div>
 																	</div>
 																)
 															})}
@@ -1932,7 +2147,15 @@ export default function BloodDonation() {
 												<div className="rounded-xl border border-dashed border-white/10 p-8 text-center bg-white/[0.02]">
 													<div className="text-2xl mb-2 opacity-20">📋</div>
 													<p className="text-[10px] text-pink-100/40 uppercase font-black tracking-[0.2em]">No Active Requests</p>
-													<p className="text-[9px] text-pink-100/20 mt-1">Submit a new request to see it here.</p>
+													<p className="text-[9px] text-pink-100/20 mt-1">
+														Submit a new request to see it here. If you just submitted one, try refreshing.
+													</p>
+													<button
+														onClick={loadDonationRequests}
+														className="mt-3 text-[9px] text-[#E91E63] hover:underline uppercase tracking-wider"
+													>
+														Check for Updates
+													</button>
 												</div>
 											)}
 										</div>
@@ -1966,7 +2189,7 @@ export default function BloodDonation() {
 											</div>
 											{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).length ? (
 												<ul className="space-y-3">
-													{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).slice(0, 5).map((need) => {
+													{(activeTab === "matches" ? matchedNeeds : emergencyNeeds).map((need) => {
 														const isUrgent = need.status === "URGENT"
 														return (
 															<li key={need.id} className="rounded-xl border border-[#F6D6E3]/40 bg-[#1A1A2E] p-4 hover:border-[#E91E63]/60 transition group">
@@ -1977,22 +2200,65 @@ export default function BloodDonation() {
 																			<span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-tighter ${isUrgent ? "bg-red-500/20 text-red-300" : "bg-yellow-500/20 text-yellow-300"}`}>
 																				{need.status || "NORMAL"}
 																			</span>
+																			{need.isCriticalMatch && (
+																				<span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[7px] font-bold text-white border border-red-400 uppercase tracking-wider shadow-lg shadow-red-600/20 animate-pulse">
+																					CRITICAL MATCH
+																				</span>
+																			)}
+																			{need.isHospitalNeed ? (
+																				<span className="ml-1 rounded bg-purple-500/20 px-1.5 py-0.5 text-[7px] font-bold text-purple-300 border border-purple-500/30 uppercase tracking-wider">
+																					HOSPITAL REQUEST
+																				</span>
+																			) : (
+																				<span className="ml-1 rounded bg-red-500/20 px-1.5 py-0.5 text-[7px] font-bold text-red-300 border border-red-500/30 uppercase tracking-wider">
+																					EMERGENCY POST
+																				</span>
+																			)}
 																		</div>
 																		<div className="space-y-1">
 																			<p className="text-[10px] text-pink-100/60 flex items-center gap-1">
-																				📍 {need.city}
+																				📍 {need.isHospitalNeed ? `${need.hospital?.name || 'Hospital'}, ${need.city}` : need.city} • <span className="text-white/40">{need.isHospitalNeed ? "From Hospital Board" : "From Emergency Board"}</span>
 																			</p>
-																			<p className="text-[10px] text-pink-100/70 border-t border-white/5 pt-1 mt-1 font-mono">
-																				{need.contact_phone}
-																			</p>
+																			{need.isHospitalNeed && (
+																				<div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-[10px] text-pink-100/70 border-t border-white/5 pt-1">
+																					{need.patient_name && (
+																						<span className="flex items-center gap-1 font-bold text-white">👤 {need.patient_name}</span>
+																					)}
+																					{need.location_details && (
+																						<span className="flex items-center gap-1">📍 {need.location_details}</span>
+																					)}
+																					{need.patient_contact && (
+																						<span className="flex items-center gap-1">📞 {need.patient_contact}</span>
+																					)}
+																					{need.time_to_reach && (
+																						<span className="flex items-center gap-1 text-red-400">🕒 {need.time_to_reach}</span>
+																					)}
+																				</div>
+																			)}
+																			{!need.isHospitalNeed && need.contact_phone && (
+																				<p className="text-[10px] text-pink-100/70 border-t border-white/5 pt-1 mt-1 font-mono">
+																					{need.contact_phone}
+																				</p>
+																			)}
 																		</div>
 																	</div>
-																	<Link href={`/needs/${need.id}`} legacyBehavior>
-																		<a className="rounded-lg h-10 w-10 flex items-center justify-center bg-[#E91E63]/10 text-[#E91E63] hover:bg-[#E91E63] hover:text-white transition-all shadow-sm">
-																			<span className="font-black text-xs">{need.required_blood_group || 'O+'}</span>
-																		</a>
-																	</Link>
+																	<div className="rounded-lg h-10 w-10 flex items-center justify-center bg-[#E91E63]/10 text-[#E91E63] shadow-sm cursor-default">
+																		<span className="font-black text-xs">{need.required_blood_group || 'O+'}</span>
+																	</div>
 																</div>
+																{/* Donate Button for Hospital Needs */}
+																<button
+																	onClick={(e) => {
+																		e.preventDefault()
+																		handleDonate(need)
+																	}}
+																	className={`mt-3 w-full rounded-lg px-3 py-2 text-xs font-bold text-white hover:opacity-90 transition shadow-sm uppercase flex items-center justify-center gap-2 ${need.isHospitalNeed ? "bg-[#E91E63]" : "bg-red-600"}`}
+																>
+																	<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																		<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+																	</svg>
+																	{need.isHospitalNeed ? "Donate at Hospital" : "Respond to Emergency"}
+																</button>
 															</li>
 														)
 													})}

@@ -277,7 +277,7 @@ export default function Home() {
 									<li className="flex items-center justify-between gap-3">
 										<span className="inline-flex items-center gap-2">
 											<span className="h-2 w-2 rounded-full bg-[#22C55E]" />
-											Organ & accident
+											Organ Pledges
 										</span>
 										<span>{metrics.moduleBreakdown.organ}</span>
 									</li>
@@ -304,7 +304,7 @@ export default function Home() {
 								<h4 className="text-sm font-semibold text-white mb-1">Hospital & Organ Care Module</h4>
 								<p className="text-xs text-pink-100/80">
 									Enables hospitals to post structured needs, manage donor requests and appointments, and coordinate organ
-									pledges and accident alerts responsibly.
+									pledges responsibly.
 								</p>
 							</div>
 							<div className="rounded-xl border border-[#F6D6E3]/25 bg-[#131326] p-5">

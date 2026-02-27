@@ -283,8 +283,11 @@ class HospitalNeed(TimeStampedModel):
 	need_type = models.CharField(max_length=20, choices=NEED_TYPE_CHOICES, default="BLOOD")
 	required_blood_group = models.CharField(max_length=3, blank=True)
 	patient_name = models.CharField(max_length=200, blank=True)
+	patient_contact = models.CharField(max_length=32, blank=True, help_text="Contact number for the patient/attendant")
+	time_to_reach = models.CharField(max_length=100, blank=True, help_text="Time within which the donor should reach")
+	location_details = models.CharField(max_length=200, blank=True, help_text="Specific place/ward within the hospital")
 	patient_details = models.TextField(blank=True, help_text="Patient information and medical condition")
-	poster_image = models.URLField(blank=True, help_text="URL to patient poster/image")
+	poster_image = models.ImageField(upload_to="hospital_needs/", blank=True, null=True, help_text="Patient poster/image")
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="NORMAL")
 	quantity_needed = models.PositiveIntegerField(default=1, help_text="Number of units needed")
 	needed_by = models.DateTimeField(null=True, blank=True)
@@ -409,9 +412,12 @@ class DonationRequest(TimeStampedModel):
 	STATUS_CHOICES = [
 		("PENDING", "Pending"),
 		("ACCEPTED", "Accepted"),
+		("SCHEDULED", "Scheduled"),
+		("SCHEDULE_CONFIRMED", "Schedule Confirmed"),
+		("REACHING", "Reaching"),
 		("ARRIVED", "Arrived"),
-		("REJECTED", "Rejected"),
 		("COMPLETED", "Completed"),
+		("REJECTED", "Rejected"),
 		("CANCELLED", "Cancelled"),
 	]
 
@@ -421,10 +427,10 @@ class DonationRequest(TimeStampedModel):
 		("PLATELETS", "Platelets"),
 	]
 
-	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="donation_requests")
+	hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="donation_requests", null=True, blank=True)
 	donor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="donor_requests", null=True, blank=True)
 	request_type = models.CharField(max_length=16, choices=REQUEST_TYPES, default="BLOOD")
-	status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="PENDING")
+	status = models.CharField(max_length=32, choices=STATUS_CHOICES, default="PENDING")
 	message = models.TextField(blank=True)
 	scheduled_date = models.DateTimeField(null=True, blank=True)
 	patient_name = models.CharField(max_length=200, blank=True, help_text="Name of the patient the donation is for")
@@ -435,8 +441,14 @@ class DonationRequest(TimeStampedModel):
 	health_status = models.CharField(max_length=100, blank=True, null=True, help_text="Summary of health assessment")
 	health_report = models.FileField(upload_to="health_reports/", blank=True, null=True)
 
+	# Linkage to original Need
+	hospital_need = models.ForeignKey("HospitalNeed", on_delete=models.SET_NULL, null=True, blank=True, related_name="donation_requests")
+	emergency_need = models.ForeignKey("EmergencyNeed", on_delete=models.SET_NULL, null=True, blank=True, related_name="donation_requests")
+
 	def __str__(self) -> str:
-		return f"Donation request from {self.hospital.name} - {self.status}"
+		donor_name = self.donor.get_full_name() if self.donor else "Unknown"
+		target = self.hospital.name if self.hospital else (self.emergency_need.title if self.emergency_need else "General")
+		return f"Donation request from {donor_name} to {target} - {self.status}"
 
 
 class DeceasedDonorRequest(TimeStampedModel):
@@ -498,42 +510,6 @@ class DeceasedDonorRequest(TimeStampedModel):
 		return f"Deceased Donor Request: {self.deceased_name} by {self.requester_name}"
 
 
-class AccidentAlert(TimeStampedModel):
-	"""Nearby accident alerts for potential organ donation opportunities"""
-	SEVERITY_CHOICES = [
-		("LOW", "Low"),
-		("MEDIUM", "Medium"),
-		("HIGH", "High"),
-		("CRITICAL", "Critical"),
-	]
-
-	STATUS_CHOICES = [
-		("ACTIVE", "Active"),
-		("RESOLVED", "Resolved"),
-		("CANCELLED", "Cancelled"),
-	]
-	user = models.OneToOneField(
-    settings.AUTH_USER_MODEL,
-    on_delete=models.CASCADE,
-    null=True,
-    blank=True,
-    related_name="accident_alerts"
-)
-	title = models.CharField(max_length=200)
-	description = models.TextField(blank=True)
-	location = models.CharField(max_length=200, help_text="Accident location")
-	city = models.CharField(max_length=120)
-	latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-	longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-	severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES, default="MEDIUM")
-	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ACTIVE")
-	accident_time = models.DateTimeField(null=True, blank=True)
-	contact_phone = models.CharField(max_length=32, blank=True)
-	hospital_referred = models.ForeignKey("Hospital", on_delete=models.SET_NULL, null=True, blank=True, related_name="accident_alerts")
-	notes = models.TextField(blank=True)
-
-	def __str__(self) -> str:
-		return f"Accident Alert: {self.title} - {self.city}"
 
 
 class BloodDonationEvent(TimeStampedModel):
@@ -692,6 +668,7 @@ class MedicalStoreProduct(TimeStampedModel):
 	image = models.ImageField(upload_to="medical_store/", blank=True, null=True)
 	is_active = models.BooleanField(default=True)
 	is_prescription_required = models.BooleanField(default=False)
+	created_from_request = models.ForeignKey("EquipmentNeed", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_medicines", help_text="Link to the original hospital request if applicable")
 
 	def __str__(self):
 		return f"{self.name} - {self.supplier.company_name}"
@@ -724,6 +701,7 @@ class MedicalEquipment(TimeStampedModel):
 	image = models.ImageField(upload_to="medical_equipment/", blank=True, null=True)
 	is_active = models.BooleanField(default=True)
 	is_new = models.BooleanField(default=True, help_text="New or used equipment")
+	created_from_request = models.ForeignKey("EquipmentNeed", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_equipment", help_text="Link to the original hospital request if applicable")
 
 	def __str__(self):
 		return f"{self.name} ({self.equipment_type}) - {self.supplier.company_name}"
@@ -776,6 +754,15 @@ class MedicalOrder(TimeStampedModel):
 		blank=True,
 		related_name="medicine_orders"
 	)
+	is_complained = models.BooleanField(default=False)
+	complaint_message = models.TextField(blank=True, help_text="Message if item not received after payment")
+	equipment_need = models.ForeignKey(
+		"EquipmentNeed",
+		on_delete=models.SET_NULL,
+		null=True,
+		blank=True,
+		related_name="medical_orders_from_need"
+	)
 
 	def generate_order_number(self):
 		"""Generate unique order number"""
@@ -806,6 +793,7 @@ class MedicalOrderItem(TimeStampedModel):
 	quantity = models.PositiveIntegerField()
 	unit_price = models.DecimalField(max_digits=10, decimal_places=2)
 	subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+	item_name = models.CharField(max_length=255, blank=True, null=True, help_text="Custom name for the item, used for direct needs")
 
 	def save(self, *args, **kwargs):
 		self.subtotal = self.quantity * self.unit_price
@@ -951,6 +939,7 @@ class EquipmentNeed(TimeStampedModel):
 		("LIFE_SUPPORT", "Life Support Equipment"),
 		("STERILIZATION", "Sterilization Equipment"),
 		("FURNITURE", "Hospital Furniture"),
+		("MEDICINE", "Medicines"),
 		("OTHER", "Other"),
 	]
 	
@@ -968,6 +957,9 @@ class EquipmentNeed(TimeStampedModel):
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="OPEN")
 	needed_by = models.DateField(null=True, blank=True)
 	notes = models.TextField(blank=True)
+	requested_supplier = models.ForeignKey(MedicalEssential, on_delete=models.SET_NULL, null=True, blank=True, related_name="requested_needs")
+	is_confirmed_by_supplier = models.BooleanField(default=False, help_text="Set to True when supplier creates the item from this request")
+	suggested_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Price suggested by hospital or supplier during the request process")
 	
 	def __str__(self) -> str:
 		return f"{self.hospital.name} - {self.equipment_name} ({self.quantity_needed})"
@@ -1105,7 +1097,6 @@ class AmbulanceRequest(TimeStampedModel):
     is_rewarded = models.BooleanField(default=False, help_text="True if the reporter has received a star for this")
     
     # Optional links
-    accident_alert = models.ForeignKey(AccidentAlert, on_delete=models.SET_NULL, null=True, blank=True, related_name="ambulance_requests")
     emergency_need = models.ForeignKey(EmergencyNeed, on_delete=models.SET_NULL, null=True, blank=True, related_name="ambulance_requests")
 
     def __str__(self) -> str:

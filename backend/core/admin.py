@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 from .models import (
 	User, DonorProfile, EmergencyNeed, OrganDonor, MarketplaceItem, Hospital, Doctor, Review,
-	DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, AccidentAlert, 
+	DonationRequest, HospitalNeed, Appointment, DeceasedDonorRequest, 
 	AmbulanceRequest, BloodDonationEvent, EventRegistration, MedicalEssential, 
 	MedicalStoreProduct, MedicalEquipment, MedicalOrder, MedicalOrderItem, 
 	EquipmentNeed, PDFIntegrityLedger
@@ -86,11 +86,6 @@ class EmergencyNeedAdmin(admin.ModelAdmin):
 	list_filter = ("need_type", "status")
 
 
-@admin.register(AccidentAlert)
-class AccidentAlertAdmin(admin.ModelAdmin):
-	list_display = ("title", "city", "severity", "status", "created_at")
-	search_fields = ("title", "city", "location")
-	list_filter = ("severity", "status")
 
 
 @admin.register(AmbulanceRequest)
